@@ -1,49 +1,37 @@
 #!/usr/bin/env bash
-# Deploy the Function App with a read-only system-assigned Managed Identity.
+# Deploy from your machine: the same Bicep template the GitHub pipeline uses,
+# then publish the code with Azure Functions Core Tools.
+#
+#   GOV_OWNER=you GOV_ALERT_EMAIL=you@example.com ./scripts/deploy.sh
+#
+# Optional: TEAMS_WEBHOOK_URL (stored in Key Vault), AZURE_LOCATION.
 set -euo pipefail
 
-RG=${RG:-rg-gov-bot}
-LOC=${LOC:-westus2}
-NAME=${NAME:-func-govbot-$RANDOM}
-STORAGE=${STORAGE:-stgovbot$RANDOM}
-SUB_ID=$(az account show --query id -o tsv)
+export AZURE_LOCATION=${AZURE_LOCATION:-westus2}
 
-# --- Infrastructure -------------------------------------------------------
-# Tagged so it passes the resource-group deny policy from apply-policy.sh.
-az group create -n "$RG" -l "$LOC" \
-  --tags owner="${OWNER:-platform-team}" environment=prod costCenter=platform -o none
-az storage account create -g "$RG" -n "$STORAGE" --sku Standard_LRS -o none
+echo "Deploying infrastructure..."
+OUTPUTS=$(az deployment sub create \
+  --name "governance-bot-$(date +%Y%m%d%H%M%S)" \
+  --location "$AZURE_LOCATION" \
+  --template-file infra/main.bicep \
+  --parameters infra/main.bicepparam \
+  --query properties.outputs -o json)
 
-# Flex Consumption = serverless, scales to zero, you pay per execution.
-az functionapp create -g "$RG" -n "$NAME" \
-  --storage-account "$STORAGE" \
-  --flexconsumption-location "$LOC" \
-  --runtime python --runtime-version 3.11 -o none
+RG=$(jq -r .resourceGroupName.value <<<"$OUTPUTS")
+APP=$(jq -r .functionAppName.value <<<"$OUTPUTS")
+echo "Infrastructure ready: $APP in $RG"
 
-# --- Identity --------------------------------------------------------------
-# System-assigned managed identity: Azure issues and rotates the credential.
-PRINCIPAL_ID=$(az functionapp identity assign -g "$RG" -n "$NAME" --query principalId -o tsv)
+echo "Publishing code..."
+func azure functionapp publish "$APP" --python
 
-# Least privilege: Reader covers Resource Graph queries and Azure Monitor metric
-# reads. The scanner never writes; tag fixes are made by Azure Policy's own
-# identities (scripts/apply-policy.sh), so no custom role is needed.
-az role assignment create --assignee-object-id "$PRINCIPAL_ID" \
-  --assignee-principal-type ServicePrincipal \
-  --role Reader --scope "/subscriptions/$SUB_ID" -o none
+cat <<EOF
 
-# --- App settings ----------------------------------------------------------
-az functionapp config appsettings set -g "$RG" -n "$NAME" -o none --settings \
-  GOV_SCHEDULE="0 0 14 * * 1-5" \
-  GOV_REQUIRED_TAGS="owner,environment,costCenter" \
-  GOV_DRY_RUN=true
-# TEAMS_WEBHOOK_URL: put it in Key Vault and use a Key Vault reference:
-#   TEAMS_WEBHOOK_URL=@Microsoft.KeyVault(SecretUri=https://<vault>.vault.azure.net/secrets/teams-webhook/)
-
-# --- Code ------------------------------------------------------------------
-func azure functionapp publish "$NAME" --python
-
-echo "Deployed $NAME."
-echo "For the stale role-assignment check, grant Microsoft Graph access:"
-echo "  RG=$RG NAME=$NAME ./scripts/grant-graph-permissions.sh"
-echo "Trigger manually:"
-echo "  az functionapp function keys list -g $RG -n $NAME --function-name scan_now"
+Deployed $APP.
+Grant Microsoft Graph access once, for the identity checks:
+  RG=$RG NAME=$APP ./scripts/grant-graph-permissions.sh
+Run a scan now:
+  KEY=\$(az functionapp function keys list -g $RG -n $APP --function-name scan_now --query default -o tsv)
+  curl "https://\$(az functionapp show -g $RG -n $APP --query defaultHostName -o tsv)/api/scan?code=\$KEY"
+Remove everything:
+  az group delete -n $RG --yes
+EOF

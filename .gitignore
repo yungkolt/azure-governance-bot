@@ -11,3 +11,4 @@ report.json
 *.report.json
 reports/
 .rbac-lab.env
+outputs.json

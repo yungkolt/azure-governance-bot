@@ -11,3 +11,8 @@ __pycache__
 .pytest_cache
 .ruff_cache
 .rbac-lab.env
+infra
+.github
+outputs.json
+*.report.json
+report.json
