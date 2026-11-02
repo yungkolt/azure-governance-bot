@@ -20,7 +20,7 @@ import logging
 from governance.azure_clients import Clients
 from governance.config import Settings
 from governance.models import Finding, Severity
-from governance.scanners._common import finding_from_row
+from governance.scanners._common import finding_from_row, vm_monthly_cost
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +52,7 @@ def scan_idle_vms(clients: Clients, settings: Settings) -> list[Finding]:
         if stats.avg_percent >= settings.idle_cpu_avg or stats.max_percent >= settings.idle_cpu_max:
             continue
 
+        cost = vm_monthly_cost(clients, row.get("vmSize"), row.get("location"))
         findings.append(
             finding_from_row(
                 row,
@@ -61,6 +62,8 @@ def scan_idle_vms(clients: Clients, settings: Settings) -> list[Finding]:
                 message=f"{row.get('vmSize')} VM averaged {stats.avg_percent}% CPU "
                 f"(peak {stats.max_percent}%) over {settings.idle_lookback_days} days; "
                 "review for shutdown or a smaller size",
+                # The VM's full cost: the most that shutting it down could save.
+                est_monthly_cost_usd=cost,
                 details={
                     "vm_size": row.get("vmSize"),
                     "avg_cpu_percent": stats.avg_percent,

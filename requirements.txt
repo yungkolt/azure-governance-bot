@@ -4,3 +4,5 @@ azure-identity>=1.17
 azure-mgmt-resourcegraph>=8.0
 azure-mgmt-monitor>=7.0
 azure-mgmt-authorization>=4.0
+azure-mgmt-costmanagement>=5.0
+azure-storage-blob>=12.20

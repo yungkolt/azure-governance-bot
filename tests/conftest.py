@@ -5,9 +5,11 @@ in each scanner's KQL and returns canned rows. FakeMetrics stands in for
 Azure Monitor. Tests run offline in milliseconds with no Azure account.
 """
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
-from governance.azure_clients import Clients, CpuStats, Principal
+from governance.azure_clients import Clients, CostRow, CpuStats, Principal
 from governance.config import Settings
 
 SUB = "00000000-0000-0000-0000-000000000001"
@@ -220,6 +222,41 @@ class FakeRoles:
         return {KV_SECRETS: "Key Vault Secrets User", OWNER: "Owner"}
 
 
+# --- cost and prices --------------------------------------------------------
+TODAY = datetime.now(UTC).date()
+LATEST = TODAY - timedelta(days=1)          # most recent complete day
+
+
+def cost_series():
+    rows = []
+    for n in range(1, 18):                   # 17 days back, through LATEST
+        day = TODAY - timedelta(days=n)
+        rows.append(CostRow(day, "rg-steady", 10.0 + (n % 3) * 0.5, "USD"))   # normal wobble
+        rows.append(CostRow(day, "rg-spike", 60.0 if day == LATEST else 10.0, "USD"))
+        rows.append(CostRow(day, "rg-tiny", 0.5 if day == LATEST else 0.1, "USD"))  # under $5
+        if day == LATEST:
+            rows.append(CostRow(day, "rg-new", 20.0, "USD"))                 # brand-new spend
+    rows.append(CostRow(TODAY, "rg-steady", 500.0, "USD"))   # today is partial: ignored
+    return rows
+
+
+class FakeCost:
+    def __init__(self, rows=None):
+        self.rows = cost_series() if rows is None else rows
+        self.calls = []
+
+    def daily_costs(self, subscription_id, start, end):
+        self.calls.append((subscription_id, start, end))
+        return [r for r in self.rows if start <= r.day <= end]
+
+
+class FakePrices:
+    HOURLY = {("standard_d4s_v5", "westus2"): 0.192, ("standard_d2s_v5", "westus2"): 0.096}
+
+    def vm_hourly_usd(self, vm_size, region):
+        return self.HOURLY.get((vm_size.lower(), region.lower()))
+
+
 class FakeDirectory:
     def __init__(self, fail: bool = False):
         self.fail = fail
@@ -249,7 +286,8 @@ def directory():
 
 @pytest.fixture
 def clients(graph, metrics, directory):
-    return Clients(graph=graph, metrics=metrics, directory=directory, roles=FakeRoles())
+    return Clients(graph=graph, metrics=metrics, directory=directory, roles=FakeRoles(),
+                   cost=FakeCost(), prices=FakePrices())
 
 
 @pytest.fixture
@@ -264,4 +302,8 @@ def settings():
         idle_cpu_max=20,
         idle_min_hours=72,
         rbac_allowed_principals=[],
+        cost_baseline_days=14,
+        cost_anomaly_sigma=3,
+        cost_anomaly_min_usd=5,
+        report_storage_url=None,
     )

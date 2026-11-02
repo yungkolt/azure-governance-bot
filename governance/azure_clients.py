@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Protocol
 
 log = logging.getLogger(__name__)
@@ -278,6 +278,144 @@ class AzureRoleCatalog:
         return names
 
 
+@dataclass
+class CostRow:
+    """Actual cost for one resource group on one day."""
+
+    day: date
+    resource_group: str
+    cost: float
+    currency: str
+
+
+class CostQuery(Protocol):
+    """Daily actual cost per resource group for one subscription."""
+
+    def daily_costs(self, subscription_id: str, start: date, end: date) -> list[CostRow]: ...
+
+
+class AzureCost:
+    """Azure Cost Management Query API.
+
+    One request per subscription returns daily ActualCost grouped by resource
+    group. Reader at subscription scope is enough to read cost data. The API
+    is rate-limited more tightly than other ARM APIs, so the scanner makes a
+    single call per subscription per run. Cost data lags usage by roughly 8 to
+    24 hours, so the most recent day is usually incomplete.
+    """
+
+    COST_COLUMNS = ("Cost", "PreTaxCost", "CostUSD")
+
+    def __init__(self, credential=None):
+        from azure.identity import DefaultAzureCredential
+
+        self._credential = credential or DefaultAzureCredential()
+        self._client = None
+
+    def _usage(self, scope: str, body: dict):
+        if self._client is None:
+            from azure.mgmt.costmanagement import CostManagementClient
+
+            self._client = CostManagementClient(self._credential)
+        return self._client.query.usage(scope=scope, parameters=body)
+
+    def daily_costs(self, subscription_id: str, start: date, end: date) -> list[CostRow]:
+        body = {
+            "type": "ActualCost",
+            "timeframe": "Custom",
+            "timePeriod": {"from": f"{start}T00:00:00Z", "to": f"{end}T23:59:59Z"},
+            "dataset": {
+                "granularity": "Daily",
+                "aggregation": {"totalCost": {"name": "Cost", "function": "Sum"}},
+                "grouping": [{"type": "Dimension", "name": "ResourceGroupName"}],
+            },
+        }
+        result = self._usage(f"/subscriptions/{subscription_id}", body)
+        if result is None or result.properties is None:
+            return []
+        props = result.properties
+        if props.next_link:
+            log.warning("Cost query for %s returned more rows than one page", subscription_id)
+        return parse_cost_rows([c.name for c in props.columns or []], props.rows or [])
+
+
+def parse_cost_rows(columns: list[str], rows: list[list]) -> list[CostRow]:
+    """Parse Cost Management rows by column name; column order is not guaranteed."""
+    index = {name: i for i, name in enumerate(columns)}
+    cost_col = next((index[c] for c in AzureCost.COST_COLUMNS if c in index), None)
+    if cost_col is None or "UsageDate" not in index:
+        raise ValueError(f"Unexpected cost columns: {columns}")
+    rg_col, cur_col = index.get("ResourceGroupName"), index.get("Currency")
+    day_col = index["UsageDate"]
+    parsed = []
+    for row in rows:
+        raw_day = str(int(row[day_col]))                       # 20261030 -> "20261030"
+        parsed.append(CostRow(
+            day=date(int(raw_day[:4]), int(raw_day[4:6]), int(raw_day[6:8])),
+            resource_group=(row[rg_col] if rg_col is not None else "") or "(no resource group)",
+            cost=float(row[cost_col] or 0),
+            currency=row[cur_col] if cur_col is not None else "USD",
+        ))
+    return parsed
+
+
+class PriceQuery(Protocol):
+    """Pay-as-you-go list prices."""
+
+    def vm_hourly_usd(self, vm_size: str, region: str) -> float | None: ...
+
+
+class RetailPrices:
+    """Azure Retail Prices API: public list prices, no authentication.
+
+    Returns the Linux pay-as-you-go hourly price, which is the floor of what a
+    VM costs: Windows licensing adds to it; reservations, savings plans and
+    Azure Hybrid Benefit reduce it. Spot and Low Priority meters are excluded.
+    """
+
+    BASE = "https://prices.azure.com/api/retail/prices"
+    API_VERSION = "2023-01-01-preview"
+    MAX_PAGES = 5
+
+    def __init__(self, timeout: int = 20):
+        self._timeout = timeout
+        self._cache: dict[tuple[str, str], float | None] = {}
+
+    def _get(self, url: str) -> dict:
+        import json
+        import urllib.request
+
+        with urllib.request.urlopen(url, timeout=self._timeout) as resp:  # noqa: S310 (fixed https)
+            return json.loads(resp.read())
+
+    def vm_hourly_usd(self, vm_size: str, region: str) -> float | None:
+        from urllib.parse import quote
+
+        key = (vm_size.lower(), region.lower())
+        if key in self._cache:
+            return self._cache[key]
+        filt = (f"serviceName eq 'Virtual Machines' and armSkuName eq '{vm_size}' "
+                f"and armRegionName eq '{region}' and priceType eq 'Consumption'")
+        url = f"{self.BASE}?api-version={self.API_VERSION}&$filter={quote(filt)}"
+        prices = []
+        for _ in range(self.MAX_PAGES):
+            page = self._get(url)
+            for item in page.get("Items", []):
+                names = " ".join(
+                    str(item.get(k, "")) for k in ("productName", "skuName", "meterName")
+                )
+                if item.get("unitOfMeasure") != "1 Hour":
+                    continue
+                if any(word in names for word in ("Windows", "Spot", "Low Priority")):
+                    continue
+                prices.append(float(item["retailPrice"]))
+            url = page.get("NextPageLink")
+            if not url:
+                break
+        self._cache[key] = min(prices) if prices else None
+        return self._cache[key]
+
+
 def _chunks(items: list, size: int):
     for start in range(0, len(items), size):
         yield items[start:start + size]
@@ -289,14 +427,17 @@ class Clients:
 
     Scanners receive this container instead of constructing SDK clients
     themselves, so tests swap in fakes and new data sources are added in one
-    place: Resource Graph (inventory), Azure Monitor (metrics) and Microsoft
-    Graph (directory).
+    place: Resource Graph (inventory), Azure Monitor (metrics), Microsoft
+    Graph (directory), Cost Management (billed cost) and the Retail Prices
+    API (list prices).
     """
 
     graph: GraphQuery
     metrics: MetricsQuery | None = None
     directory: DirectoryQuery | None = None
     roles: RoleCatalog | None = None
+    cost: CostQuery | None = None
+    prices: PriceQuery | None = None
 
 
 def build_clients(subscription_ids: list[str] | None = None) -> Clients:
@@ -309,4 +450,6 @@ def build_clients(subscription_ids: list[str] | None = None) -> Clients:
         metrics=AzureMetrics(credential=credential),
         directory=GraphDirectory(credential=credential),
         roles=AzureRoleCatalog(credential=credential),
+        cost=AzureCost(credential=credential),
+        prices=RetailPrices(),
     )
