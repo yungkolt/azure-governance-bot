@@ -57,11 +57,36 @@ def test_broad_assignments(clients, settings):
     findings = scan_broad_role_assignments(clients, settings)
     found = {f.resource_id.rsplit("/", 1)[-1]: f for f in findings}
     # 1 Owner/user/sub, 2 Contributor/group/sub, 5 policy SP, 6 deleted owner,
-    # 9 foreign group, 10 management group.  3 is RG scope, 4 is Reader: excluded.
-    assert set(found) == {"ra-1", "ra-2", "ra-5", "ra-6", "ra-9", "ra-10"}
+    # 9 foreign group, 10 management group, 12 conditional RBAC admin.
+    # 3 is RG scope, 4 is Reader: excluded.
+    assert set(found) == {"ra-1", "ra-2", "ra-5", "ra-6", "ra-9", "ra-10", "ra-12"}
     assert found["ra-1"].severity == Severity.HIGH            # Owner grants access
     assert found["ra-2"].severity == Severity.MEDIUM          # Contributor doesn't
     assert found["ra-10"].details["scope_level"] == "management-group"
+
+
+def test_conditional_access_granting_role_is_medium(clients, settings):
+    found = {f.resource_id.rsplit("/", 1)[-1]: f
+             for f in scan_broad_role_assignments(clients, settings)}
+    constrained = found["ra-12"]
+    assert constrained.severity == Severity.MEDIUM
+    assert "constrained by a role assignment condition" in constrained.message
+    assert constrained.details["conditional"] is True
+    assert found["ra-1"].details["conditional"] is False      # unconstrained Owner stays HIGH
+    assert found["ra-1"].severity == Severity.HIGH
+
+
+def test_condition_loaded_from_resource_graph(clients):
+    by_id = {a.id.rsplit("/", 1)[-1]: a for a in load_assignments(clients)}
+    assert by_id["ra-12"].conditional
+    assert not by_id["ra-1"].conditional                      # "" from ARG means no condition
+
+
+def test_subscription_findings_name_their_subscription(clients, settings):
+    found = {f.resource_id.rsplit("/", 1)[-1]: f
+             for f in scan_broad_role_assignments(clients, settings)}
+    assert found["ra-1"].resource_group == f"(subscription {SUB[:8]})"
+    assert found["ra-10"].resource_group == "(management-group)"
 
 
 def test_direct_user_assignment_is_called_out(clients, settings):
@@ -84,7 +109,7 @@ def test_allowlist(clients, settings):
 def test_broad_check_survives_graph_failure(graph, settings):
     clients = Clients(graph=graph, directory=FakeDirectory(fail=True))
     findings = scan_broad_role_assignments(clients, settings)
-    assert len(findings) == 6                                  # still reported, IDs only
+    assert len(findings) == 7                                  # still reported, IDs only
 
 
 # --- stale role assignments -------------------------------------------------
@@ -153,4 +178,4 @@ def test_role_names_fall_back_when_api_fails(graph):
 
 def test_duplicate_assignment_rows_are_collapsed(clients):
     ids = [a.id for a in load_assignments(clients)]
-    assert len(ids) == len(set(ids)) == 11
+    assert len(ids) == len(set(ids)) == 12

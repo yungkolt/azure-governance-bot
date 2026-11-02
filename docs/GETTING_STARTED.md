@@ -149,9 +149,21 @@ curl "http://localhost:7071/api/scan"
 The JSON response is the same report the CLI produces.
 
 ## 7. Teams report
-1. In Teams, open **Workflows** and create a flow from a template that posts to a channel when a webhook request is received.
-2. Copy the generated URL into `TEAMS_WEBHOOK_URL`. Treat it as a secret.
-3. Run `python -m governance.cli --teams`.
+The report is posted through a Teams Workflows webhook. Office 365 Connectors (the older "Incoming Webhook") are being retired, so use Workflows.
+
+1. In Teams, open the channel that should receive the report.
+2. Select **...** (More options) next to the channel name, then **Workflows**.
+3. Search for the template **Send webhook alerts to a channel** and select it.
+4. Confirm the team and channel, then select **Save** (or **Add workflow**).
+5. Select **Copy webhook link**.
+6. Set the URL locally, then run a scan that posts:
+
+   ```bash
+   export TEAMS_WEBHOOK_URL='<copied URL>'   # PowerShell: $env:TEAMS_WEBHOOK_URL='<copied URL>'
+   python -m governance.cli --teams
+   ```
+
+Treat the URL as a secret: anyone who has it can post to the channel. In the deployed app it lives in Key Vault (see [DEPLOYMENT.md](DEPLOYMENT.md)). If the workflow is turned off or deleted, posts fail and the failure is logged without stopping the scan.
 
 ## 8. Cost anomalies
 The `cost-anomaly` check reads real billing data, so it can't be demonstrated instantly with a test environment: cost data arrives 8 to 24 hours after usage, and a baseline needs days of history. What you can do now:
