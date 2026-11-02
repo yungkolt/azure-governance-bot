@@ -3,3 +3,4 @@ azure-functions>=1.20
 azure-identity>=1.17
 azure-mgmt-resourcegraph>=8.0
 azure-mgmt-monitor>=7.0
+azure-mgmt-authorization>=4.0

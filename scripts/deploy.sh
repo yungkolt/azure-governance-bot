@@ -42,5 +42,8 @@ az functionapp config appsettings set -g "$RG" -n "$NAME" -o none --settings \
 # --- Code ------------------------------------------------------------------
 func azure functionapp publish "$NAME" --python
 
-echo "Deployed $NAME. Trigger manually:"
+echo "Deployed $NAME."
+echo "For the stale role-assignment check, grant Microsoft Graph access:"
+echo "  RG=$RG NAME=$NAME ./scripts/grant-graph-permissions.sh"
+echo "Trigger manually:"
 echo "  az functionapp function keys list -g $RG -n $NAME --function-name scan_now"

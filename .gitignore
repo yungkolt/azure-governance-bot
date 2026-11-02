@@ -7,5 +7,7 @@ local.settings.json
 .pytest_cache/
 .ruff_cache/
 .coverage
-*.json.report
+report.json
+*.report.json
 reports/
+.rbac-lab.env

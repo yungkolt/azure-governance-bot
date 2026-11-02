@@ -24,6 +24,9 @@ CHECK_LABELS = {
     "empty-app-service-plan": "Empty App Service Plans",
     "stopped-not-deallocated-vm": "Stopped (still billing) VMs",
     "idle-vm": "Idle VMs",
+    "broad-role-assignment": "Broad privileged roles",
+    "stale-role-assignment": "Stale role assignments",
+    "custom-role-wildcard": "Wildcard custom roles",
 }
 TOP_N = 5  # full detail is in the JSON report
 

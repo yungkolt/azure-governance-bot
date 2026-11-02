@@ -10,10 +10,14 @@ flowchart TB
         RUN[runner.run_scan] --> REG[Scanner registry]
         REG --> SG[Inventory scanners<br/>untagged, disks, IPs,<br/>NICs, plans, stopped VMs]
         REG --> SI[idle_vms.py]
+        REG --> SR[RBAC scanners<br/>broad, stale, wildcard]
         RUN --> TEAMS[reporting/teams.py]
     end
-    MI[System-assigned<br/>Managed Identity<br/>Reader] -. token .-> ARG
-    MI -. token .-> MON
+    MI[System-assigned<br/>Managed Identity] -. Reader .-> ARG
+    MI -. Reader .-> MON
+    MI -. Directory.Read.All .-> MSG[(Microsoft Graph)]
+    SR --> ARG
+    SR --> MSG
     SG --> ARG[(Azure Resource Graph)]
     SI --> ARG
     SI --> MON[(Azure Monitor<br/>metrics API)]
@@ -34,8 +38,9 @@ flowchart TB
 4. `run_scan()` creates a `ScanReport` and calls each registered scanner with the container.
 5. Inventory scanners send one KQL query each to Resource Graph and convert rows into `Finding` objects.
 6. The idle-VM scanner queries Resource Graph for running VMs, then requests 14 days of hourly CPU for each VM from Azure Monitor.
-7. Findings are aggregated. An exception in one scanner, or in one VM's metrics call, is logged without stopping the rest.
-8. If a webhook is configured, an Adaptive Card summary is posted to Teams. The HTTP trigger also returns the full report as JSON.
+7. The RBAC scanners read role assignments and definitions from Resource Graph's `authorizationresources` table, then resolve the principals through Microsoft Graph.
+8. Findings are aggregated. An exception in one scanner, or in one VM's metrics call, is logged without stopping the rest.
+9. If a webhook is configured, an Adaptive Card summary is posted to Teams. The HTTP trigger also returns the full report as JSON.
 
 ## Prevent, then detect
 
@@ -65,6 +70,7 @@ Resource Graph also exposes properties not available from a plain resource listi
 | Identity | Role | Used for |
 |---|---|---|
 | Function App system-assigned identity | Reader (subscription) | Resource Graph queries, metric reads |
+| Function App system-assigned identity | `Directory.Read.All` (Microsoft Graph app role) | Resolving principals for the RBAC checks |
 | Each Policy Modify assignment's identity | Roles declared by the policy definition | Writing inherited tags |
 | Developer (local) | Your own `az login` session | Running the CLI |
 
@@ -74,6 +80,27 @@ No custom RBAC role is needed. Reader already includes `Microsoft.Insights/metri
 
 ### Dependency injection
 Scanners take a `Clients` container instead of constructing SDK clients. The container holds `graph` (the `GraphQuery` protocol) and `metrics` (the `MetricsQuery` protocol). Tests inject `FakeGraph` and `FakeMetrics`, so the suite runs offline in milliseconds. Phase 3 (Microsoft Graph) and Phase 4 (Cost Management) add fields to the same container without changing existing scanners.
+
+### Identity and access review
+Three checks share one loader (`scanners/rbac.py`):
+
+| Check | Finds | Why it matters |
+|---|---|---|
+| `broad-role-assignment` | Owner, Contributor, User Access Administrator or RBAC Administrator at subscription, management-group or root scope | Control over everything underneath; Owner and the two administrator roles can also grant access to others |
+| `stale-role-assignment` | Assignments whose principal was deleted, or whose user is disabled | Deleted principals clutter access reviews and count toward the role-assignment limit; a disabled user's access returns the moment the account is re-enabled |
+| `custom-role-wildcard` | Custom roles with `*` or `Provider/*` actions | Owner-equivalent power hidden behind an innocuous role name |
+
+**Two permission systems.** Azure RBAC governs Azure resources; Microsoft Graph app roles govern directory data. They are granted separately. The Managed Identity's Reader role lets it *read* role assignments, but only a Graph app role (`Directory.Read.All`, granted by `scripts/grant-graph-permissions.sh`) lets it look up who the principals are. Locally, the Azure CLI's own token covers both.
+
+**Matching roles to names.** Role assignments and role definitions are read in two Resource Graph queries and joined in Python on the role definition GUID. A KQL join is avoided because the two tables format `roleDefinitionId` differently, and built-in roles are not guaranteed to appear as rows. The GUIDs of the privileged built-in roles are fixed across every Azure tenant, so they are mapped directly. Because `ResourceGraph` caches results per query string within a run, the three checks cost two Resource Graph requests in total.
+
+**Graph lookups.** `GraphDirectory` calls `directoryObjects/getByIds` (up to 1000 IDs per request) to learn which principals exist, then `users?$filter=id in (...)` (up to 15 IDs per filter) to read `accountEnabled`, which `getByIds` does not return by default. Results are cached for the run. Plain HTTPS is used rather than the Microsoft Graph SDK, which is large and asynchronous for what are two read-only calls.
+
+**Failure modes.** A principal missing from the Graph response means it was deleted. A failed Graph *call* means nothing at all, so the stale check raises instead of reporting every assignment as stale, and the runner logs it. The broad-role check treats Graph as optional: it still reports, showing principal IDs instead of names. `ForeignGroup` principals (Azure Lighthouse) are skipped because they live in another tenant by design.
+
+**Allowlisting.** Some identities legitimately need broad roles, such as break-glass accounts and automation identities. Their object IDs go in `GOV_RBAC_ALLOWED_PRINCIPALS`. A relevant example in this repository: if the Policy Modify definitions declare Contributor, the identities created by `apply-policy.sh` hold Contributor at subscription scope and are reported. The choices are to allowlist them, or to reapply with `POLICY_ROLE="Tag Contributor"` so they no longer hold a broad privileged role.
+
+**Scope of the data.** Resource Graph returns the role assignments visible within the scanned subscriptions. Entra ID directory roles (such as Global Administrator) are a separate system and are not in scope, and neither are PIM *eligible* assignments, which are not standing access.
 
 ### Idle-VM detection
 A VM is idle when **both** hold over the lookback window:
@@ -102,12 +129,16 @@ Cost-based checks share one set of bands (`scanners/_common.py`): **High** ≥ $
 | Stopped but not deallocated VM | Always High (full compute cost for no work) |
 | Idle VM | Medium (needs human review) |
 | Untagged resource | Medium if missing all required tags, Low if missing some |
+| Broad role assignment | High for Owner, User Access Administrator, RBAC Administrator; Medium for Contributor |
+| Stale role assignment | High if the role is privileged, otherwise Medium |
+| Custom role wildcard | High for `*`, Medium for a provider-wide wildcard |
 
 ## Security considerations
 - No secrets in source or app settings. The Teams webhook URL is intended to be a Key Vault reference.
 - The HTTP trigger requires a function key (`AuthLevel.FUNCTION`).
 - The webhook client rejects non-HTTPS URLs.
-- The scanner is read-only. Write access lives only with Policy assignment identities.
+- The scanner is read-only in both Azure and Microsoft Graph. Write access lives only with Policy assignment identities.
+- Lab scripts that create test users give them random passwords that are never displayed, and the persistent one is disabled.
 
 ## Hosting
 Azure Functions Flex Consumption: scales to zero and bills per execution, which suits a job that runs for seconds once a day. The function timeout is 10 minutes (`host.json`).

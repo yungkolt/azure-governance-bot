@@ -16,10 +16,14 @@
 - Audit-first rollout with `ENFORCEMENT=DoNotEnforce`
 - Decision: no custom RBAC role. Reader covers metric reads, and all writes are made by Policy's own identities.
 
-## Phase 3: Identity and access review
-- Role-assignment scanner: Owner or Contributor at subscription or management-group scope, direct user assignments, and custom roles with wildcard actions
-- Microsoft Graph integration to resolve principals and flag disabled or deleted identities that still hold role assignments
-- Least-privilege Graph application permissions (`User.Read.All`, `Group.Read.All`)
+## Phase 3: Identity and access review (complete)
+- Broad privileged role assignments at subscription, management-group or root scope, with direct-to-user assignments called out
+- Stale role assignments held by deleted principals or disabled users, via Microsoft Graph
+- Custom roles granting `*` or provider-wide wildcard actions
+- Allowlist for break-glass and automation identities
+- Graph permission script for the Managed Identity (`Directory.Read.All`, the least-privileged permission for `getByIds`)
+- Identity lab script for producing each finding in a personal tenant
+- Possible extension: last sign-in date for users (requires `AuditLog.Read.All` and Entra ID P1)
 
 ## Phase 4: Cost analytics
 - Daily cost by resource group from the Cost Management Query API

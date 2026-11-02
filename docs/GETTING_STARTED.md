@@ -8,15 +8,17 @@ Run these stages in order. Each one adds a single new moving part, so a failure 
 | 2. Read-only scan | Yes | Free | No |
 | 3. Test environment | Yes | Cents per day | Creates one resource group |
 | 4. Azure Policy | Yes | Free | Creates policy assignments |
-| 5. Local Functions host | Yes | Free | No |
-| 6. Teams report | Yes | Free | No |
-| 7. Deploy | Yes | Low | Creates a Function App |
+| 5. Identity lab | Yes | Free | Creates test users, a role assignment and a custom role |
+| 6. Local Functions host | Yes | Free | No |
+| 7. Teams report | Yes | Free | No |
+| 8. Deploy | Yes | Low | Creates a Function App |
 
 ## Prerequisites
 - Python 3.11 or later
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
 - An Azure subscription you own. A personal pay-as-you-go or free-trial subscription is recommended.
-- For stage 5: [Azure Functions Core Tools v4](https://learn.microsoft.com/azure/azure-functions/functions-run-local) and [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite)
+- For stage 5: User Administrator or Global Administrator in your own tenant
+- For stage 6: [Azure Functions Core Tools v4](https://learn.microsoft.com/azure/azure-functions/functions-run-local) and [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite)
 
 ## 1. Unit tests (offline)
 ```bash
@@ -98,7 +100,33 @@ az group create -n rg-with-owner -l westus2 --tags owner=you && az group delete 
 
 Check remediation progress with `az policy remediation list -o table`. Remove everything with `./scripts/remove-policy.sh`; tags already applied stay in place.
 
-## 5. Local Azure Functions host
+## 5. Identity lab
+```bash
+./scripts/create-rbac-lab.sh
+# wait a few minutes for Resource Graph to index role changes
+python -m governance.cli -v
+```
+Expected findings:
+
+| Check | Principal or role | Severity |
+|---|---|---|
+| `broad-role-assignment` | disabled lab user, Contributor at subscription | Medium |
+| `stale-role-assignment` | disabled lab user (Contributor) | High |
+| `stale-role-assignment` | deleted lab user (Reader), shown by object ID | Medium |
+| `custom-role-wildcard` | `Gov Lab Compute Operator …` (`Microsoft.Compute/*`) | Medium |
+
+You will also see a `broad-role-assignment` for **your own account** (Owner at subscription scope). That is accurate: subscription owners are exactly what the check is meant to surface. In an organization, the answer is to keep only a few owners, assign roles to groups, and use PIM for just-in-time elevation. In a personal subscription, you can allowlist yourself:
+```bash
+export GOV_RBAC_ALLOWED_PRINCIPALS=$(az ad signed-in-user show --query id -o tsv)
+```
+If you applied Azure Policy in stage 4, its Modify identities may also appear with Contributor. See *Allowlisting* in `ARCHITECTURE.md`.
+
+Clean up:
+```bash
+./scripts/remove-rbac-lab.sh
+```
+
+## 6. Local Azure Functions host
 ```bash
 cp local.settings.example.json local.settings.json
 azurite --silent &                # local storage emulator required by the timer trigger
@@ -110,13 +138,18 @@ curl "http://localhost:7071/api/scan"
 ```
 The JSON response is the same report the CLI produces.
 
-## 6. Teams report
+## 7. Teams report
 1. In Teams, open **Workflows** and create a flow from a template that posts to a channel when a webhook request is received.
 2. Copy the generated URL into `TEAMS_WEBHOOK_URL`. Treat it as a secret.
 3. Run `python -m governance.cli --teams`.
 
-## 7. Deploy
+## 8. Deploy
 See `scripts/deploy.sh`. Run it a section at a time and check each resource in the portal before moving to the next.
+
+The RBAC checks need one extra step in Azure, because the Managed Identity starts with no Microsoft Graph access:
+```bash
+RG=rg-gov-bot NAME=<function-app-name> ./scripts/grant-graph-permissions.sh
+```
 
 ## Cost safeguard
 Before stage 3, create a budget alert on your subscription (**Cost Management**, then **Budgets**), for example $10 per month with email alerts at 50% and 100%.
@@ -129,4 +162,6 @@ Before stage 3, create a budget alert on your subscription (**Cost Management**,
 | `AuthorizationFailed` | The identity lacks Reader on the subscription |
 | `RequestDisallowedByPolicy` when creating a resource group | Working as intended: add `--tags owner=<name>` |
 | No idle VMs reported | VMs need at least 72 hours of metrics; lower `GOV_IDLE_MIN_HOURS` to test |
+| `Scanner stale-role-assignment failed` with 403 | The identity lacks Microsoft Graph access; run `grant-graph-permissions.sh` |
+| RBAC lab findings missing | Role changes can take several minutes to reach Resource Graph |
 | `func start` fails on the timer trigger | Azurite isn't running |

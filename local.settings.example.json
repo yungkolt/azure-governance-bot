@@ -10,6 +10,7 @@
     "GOV_IDLE_CPU_AVG": "5",
     "GOV_IDLE_CPU_MAX": "20",
     "GOV_IDLE_MIN_HOURS": "72",
+    "GOV_RBAC_ALLOWED_PRINCIPALS": "",
     "GOV_DRY_RUN": "true",
     "TEAMS_WEBHOOK_URL": ""
   }
