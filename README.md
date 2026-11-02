@@ -62,7 +62,7 @@ python -m governance.cli -v                         # read-only scan
 ```
 
 - [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md): first run, test environments, Azure Policy
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): Bicep, GitHub Actions with OIDC, Graph permissions
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): Bicep, GitHub Actions with OIDC, Graph permissions, teardown
 
 ## Configuration
 

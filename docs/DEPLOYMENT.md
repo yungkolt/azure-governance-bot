@@ -86,7 +86,15 @@ Listing blobs with `--auth-mode login` needs a data-plane role for *you*, such a
 
 ## Remove everything
 ```bash
-az group delete -n rg-gov-bot --yes
-az role assignment delete --assignee <principalId output> --scope /subscriptions/<sub-id>
+REPO=yungkolt/azure-governance-bot ./scripts/teardown.sh
 ```
-The second command removes the subscription-level Reader assignment, which lives outside the resource group. Skip it and the scanner's next run reports it as a stale assignment, because the identity it belonged to no longer exists.
+With continuous deployment connected, deleting the resource group alone isn't enough: the next push to `main` would redeploy it. `teardown.sh` asks for confirmation, then:
+
+1. Disables the Deploy workflow.
+2. Removes the scanner's subscription-level Reader assignment, which lives outside the resource group and would otherwise be left orphaned.
+3. Deletes the resource group. The managed identity and its Microsoft Graph permission are removed with the Function App.
+4. Purges the soft-deleted Key Vault, so a later redeploy can reuse the name.
+
+Add `REMOVE_PIPELINE=1` to also delete the pipeline's app registration, its role assignments, and the GitHub variables and environment.
+
+To bring it back: `gh workflow enable Deploy && gh workflow run Deploy`, then grant Graph access again with `grant-graph-permissions.sh`. After `REMOVE_PIPELINE=1`, run `setup-github-oidc.sh` first.
