@@ -1,0 +1,4 @@
+# Runtime dependencies (deployed to Azure Functions)
+azure-functions>=1.20
+azure-identity>=1.17
+azure-mgmt-resourcegraph>=8.0

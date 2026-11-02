@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+local.settings.json
+.python_packages/
+.pytest_cache/
+.ruff_cache/
+.coverage
+*.json.report
+reports/

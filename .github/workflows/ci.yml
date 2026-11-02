@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Lint
+        run: ruff check .
+      - name: Test
+        run: pytest --cov=governance --cov-report=term-missing
+
+  # Phase 5: add a deploy job here using OIDC federated credentials
+  # (azure/login with client-id/tenant-id/subscription-id, NO client secret),
+  # then Azure/functions-action to publish. See docs/ROADMAP.md.

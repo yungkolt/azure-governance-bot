@@ -1,0 +1,12 @@
+.git*
+.venv
+.vscode
+tests
+docs
+scripts
+local.settings.json
+local.settings.example.json
+requirements-dev.txt
+__pycache__
+.pytest_cache
+.ruff_cache
