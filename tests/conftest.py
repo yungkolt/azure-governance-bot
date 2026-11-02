@@ -7,7 +7,7 @@ Azure Monitor. Tests run offline in milliseconds with no Azure account.
 
 import pytest
 
-from governance.azure_clients import Clients, CpuStats
+from governance.azure_clients import Clients, CpuStats, Principal
 from governance.config import Settings
 
 SUB = "00000000-0000-0000-0000-000000000001"
@@ -101,8 +101,77 @@ CPU = {
     "vm-new": CpuStats(avg_percent=0.5, max_percent=2.0, hours_with_data=10),
 }
 
+# --- RBAC -------------------------------------------------------------------
+SUB_SCOPE = f"/subscriptions/{SUB}"
+OWNER = "8e3af657-a8ff-443c-a75c-2fe8c4bcb635"
+CONTRIBUTOR = "b24988ac-6180-42a0-ab88-20f7382dd24c"
+READER = "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+CUSTOM_VM = "11111111-1111-1111-1111-111111111111"
+CUSTOM_ALL = "22222222-2222-2222-2222-222222222222"
+CUSTOM_SAFE = "33333333-3333-3333-3333-333333333333"
+
+U_ALICE = "aaaaaaaa-0000-0000-0000-000000000001"     # active user
+U_GONE = "aaaaaaaa-0000-0000-0000-000000000002"      # deleted user
+U_DISABLED = "aaaaaaaa-0000-0000-0000-000000000003"  # disabled user
+G_OPS = "bbbbbbbb-0000-0000-0000-000000000001"       # group
+SP_APP = "cccccccc-0000-0000-0000-000000000001"      # app service principal
+SP_POLICY = "cccccccc-0000-0000-0000-000000000002"   # policy identity (allowlisted in a test)
+FOREIGN = "dddddddd-0000-0000-0000-000000000001"     # Lighthouse group
+
+
+def assignment(n, principal, ptype, scope, role):
+    return {
+        "id": f"{scope}/providers/Microsoft.Authorization/roleAssignments/ra-{n}",
+        "subscriptionId": SUB, "principalId": principal, "principalType": ptype,
+        "scope": scope,
+        "roleDefinitionId": f"{SUB_SCOPE}/providers/Microsoft.Authorization/roleDefinitions/{role}",
+        "createdOn": "2025-06-01T00:00:00Z",
+    }
+
+
+ROLE_ASSIGNMENTS = [
+    assignment(1, U_ALICE, "User", SUB_SCOPE, OWNER),                       # broad HIGH
+    assignment(2, G_OPS, "Group", SUB_SCOPE, CONTRIBUTOR),                  # broad MEDIUM
+    assignment(3, SP_APP, "ServicePrincipal", f"{SUB_SCOPE}/resourceGroups/rg-app", OWNER),
+    assignment(4, U_ALICE, "User", SUB_SCOPE, READER),                      # not privileged
+    assignment(5, SP_POLICY, "ServicePrincipal", SUB_SCOPE, CONTRIBUTOR),   # broad unless allowed
+    assignment(6, U_GONE, "User", SUB_SCOPE, OWNER),                        # broad + stale
+    assignment(7, U_DISABLED, "User", f"{SUB_SCOPE}/resourceGroups/rg-app", READER),  # stale
+    assignment(8, G_OPS, "Group", f"{SUB_SCOPE}/resourceGroups/rg-vm", CUSTOM_VM),
+    assignment(9, FOREIGN, "ForeignGroup", SUB_SCOPE, CONTRIBUTOR),         # broad, not stale
+    assignment(10, G_OPS, "Group",
+               "/providers/Microsoft.Management/managementGroups/mg-root", CONTRIBUTOR),
+]
+
+
+def role_def(guid, name, role_type, permissions):
+    return {
+        "id": f"{SUB_SCOPE}/providers/Microsoft.Authorization/roleDefinitions/{guid}",
+        "subscriptionId": SUB, "roleName": name, "roleType": role_type,
+        "permissions": permissions, "assignableScopes": [SUB_SCOPE],
+    }
+
+
+ROLE_DEFINITIONS = [
+    role_def(CUSTOM_ALL, "Everything Role", "CustomRole", [{"actions": ["*"], "notActions": []}]),
+    role_def(CUSTOM_VM, "VM Operator Plus", "CustomRole",   # capitalised keys on purpose
+             [{"Actions": ["Microsoft.Compute/*", "Microsoft.Network/virtualNetworks/read"]}]),
+    role_def(CUSTOM_SAFE, "Safe Reader", "CustomRole", [{"actions": ["*/read"]}]),
+    role_def(OWNER, "Owner", "BuiltInRole", [{"actions": ["*"]}]),        # built-ins ignored
+]
+
+PRINCIPALS = {
+    U_ALICE: Principal(U_ALICE, "user", "Alice", "alice@contoso.com", True),
+    U_DISABLED: Principal(U_DISABLED, "user", "Dan", "dan@contoso.com", False),
+    G_OPS: Principal(G_OPS, "group", "Ops Team"),
+    SP_APP: Principal(SP_APP, "servicePrincipal", "billing-app", "app-id-1", True),
+    SP_POLICY: Principal(SP_POLICY, "servicePrincipal", "inherit-owner", "app-id-2", True),
+}
+
 # First matching marker wins, so the more specific markers come first.
 ROUTES = [
+    ("microsoft.authorization/roleassignments", ROLE_ASSIGNMENTS),
+    ("microsoft.authorization/roledefinitions", ROLE_DEFINITIONS),
     ("PowerState/stopped", STOPPED_VMS),
     ("PowerState/running", RUNNING_VMS),
     ("microsoft.compute/disks", UNATTACHED_DISKS),
@@ -136,6 +205,18 @@ class FakeMetrics:
         return CPU.get(name)
 
 
+class FakeDirectory:
+    def __init__(self, fail: bool = False):
+        self.fail = fail
+        self.calls: list[list[str]] = []
+
+    def lookup(self, ids):
+        self.calls.append(list(ids))
+        if self.fail:
+            raise RuntimeError("Graph unavailable")
+        return {i: PRINCIPALS[i] for i in ids if i in PRINCIPALS}
+
+
 @pytest.fixture
 def graph():
     return FakeGraph()
@@ -147,8 +228,13 @@ def metrics():
 
 
 @pytest.fixture
-def clients(graph, metrics):
-    return Clients(graph=graph, metrics=metrics)
+def directory():
+    return FakeDirectory()
+
+
+@pytest.fixture
+def clients(graph, metrics, directory):
+    return Clients(graph=graph, metrics=metrics, directory=directory)
 
 
 @pytest.fixture
@@ -162,4 +248,5 @@ def settings():
         idle_cpu_avg=5,
         idle_cpu_max=20,
         idle_min_hours=72,
+        rbac_allowed_principals=[],
     )

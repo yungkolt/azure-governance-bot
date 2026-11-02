@@ -45,6 +45,12 @@ class Settings:
     idle_cpu_max: float = field(default_factory=lambda: _float("GOV_IDLE_CPU_MAX", 20))
     idle_min_hours: int = field(default_factory=lambda: _int("GOV_IDLE_MIN_HOURS", 72))
 
+    # Principal object IDs exempt from the broad-role-assignment check, such as
+    # break-glass accounts or automation identities that need subscription scope.
+    rbac_allowed_principals: list[str] = field(
+        default_factory=lambda: _csv("GOV_RBAC_ALLOWED_PRINCIPALS")
+    )
+
     # Report-only mode. The scanner never modifies resources; remediation is
     # performed by Azure Policy (see scripts/apply-policy.sh).
     dry_run: bool = field(

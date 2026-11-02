@@ -10,3 +10,4 @@ requirements-dev.txt
 __pycache__
 .pytest_cache
 .ruff_cache
+.rbac-lab.env

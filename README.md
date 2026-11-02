@@ -1,6 +1,6 @@
 # Azure Governance Bot
 
-Serverless governance and cost-optimization scanner for Microsoft Azure. It inventories every in-scope subscription through Azure Resource Graph, combines that with Azure Monitor metrics to detect governance gaps and wasted spend, and publishes a summary to Microsoft Teams. Azure Policy prevents and auto-remediates tagging gaps, so the scanner reports only what policy can't fix.
+Serverless governance and cost-optimization scanner for Microsoft Azure. It inventories every in-scope subscription through Azure Resource Graph, combines that with Azure Monitor metrics and Microsoft Graph to detect wasted spend, governance gaps and risky access, and publishes a summary to Microsoft Teams. Azure Policy prevents and auto-remediates tagging gaps, so the scanner reports only what policy can't fix.
 
 ![CI](https://github.com/yungkolt/azure-governance-bot/actions/workflows/ci.yml/badge.svg)
 
@@ -10,7 +10,8 @@ flowchart LR
     H[HTTP trigger] --> F
     F -- Managed Identity<br/>Reader --> ARG[(Azure Resource Graph)]
     F -- Reader --> MON[(Azure Monitor<br/>metrics)]
-    F --> S{7 scanners}
+    F -- Directory.Read.All --> MG[(Microsoft Graph)]
+    F --> S{10 scanners}
     F --> R[Teams Adaptive Card]
     P[Azure Policy<br/>deny + modify] -. prevents and fixes .-> AZ[Subscription resources]
     ARG -. indexes .- AZ
@@ -28,7 +29,9 @@ flowchart LR
 | `stopped-not-deallocated-vm` | VMs stopped from the guest OS that still bill for compute | Available |
 | `idle-vm` | Running VMs with low average and low peak CPU over 14 days | Available |
 | Policy enforcement | Deny resource groups without `owner`; inherit tags from the resource group | Available |
-| `broad-role-assignment` | Owner/Contributor at broad scope, stale or orphaned principals | Planned |
+| `broad-role-assignment` | Owner, Contributor or access-granting roles at subscription, management-group or root scope | Available |
+| `stale-role-assignment` | Role assignments held by deleted principals or disabled users | Available |
+| `custom-role-wildcard` | Custom roles granting `*` or provider-wide wildcard actions | Available |
 | `cost-anomaly` | Daily spend outside the expected range | Planned |
 
 See [docs/ROADMAP.md](docs/ROADMAP.md).
@@ -37,11 +40,12 @@ See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 - **Azure Resource Graph for inventory.** One KQL query spans all subscriptions and returns from an index, instead of thousands of per-resource ARM calls that are subject to throttling.
 - **Secretless authentication.** `DefaultAzureCredential` uses Azure CLI credentials locally and a system-assigned Managed Identity in Azure. No secrets exist in code or configuration.
-- **Least privilege.** The scanner's identity holds only the built-in Reader role, which covers both Resource Graph and Azure Monitor metric reads.
+- **Least privilege.** The scanner's identity holds only the built-in Reader role in Azure, which covers Resource Graph and Azure Monitor metric reads, plus `Directory.Read.All` in Microsoft Graph for resolving principals. Both are read-only.
 - **Prevent, then detect.** Azure Policy blocks untagged resource groups and copies tags down to resources. The scanner never modifies anything, and reports what policy can't address, such as idle or orphaned resources.
 - **Separate write identities.** Each Policy Modify assignment has its own managed identity with only the roles its definition declares, so write access never sits with the scanner.
 - **Pluggable scanners.** Each check is a function returning `Finding` objects, registered in `governance/scanners/__init__.py`. Reporting is unaffected by new checks.
-- **Injected dependencies.** Scanners receive a `Clients` container (Resource Graph and metrics) instead of creating SDK clients, so tests use in-memory fakes.
+- **Injected dependencies.** Scanners receive a `Clients` container (Resource Graph, metrics and directory) instead of creating SDK clients, so tests use in-memory fakes.
+- **No false positives on outages.** If Microsoft Graph is unreachable, the stale-assignment check fails loudly rather than reporting every principal as deleted.
 - **Thin triggers.** `function_app.py` delegates to `runner.run_scan()`, which the CLI and test suite share.
 - **Fault isolation.** A failing scanner is logged and the remaining scanners still report.
 
@@ -72,6 +76,7 @@ Full first-run walkthrough, including a disposable test environment: [docs/GETTI
 | `GOV_IDLE_CPU_AVG` | `5` | Average CPU % below which a VM is idle |
 | `GOV_IDLE_CPU_MAX` | `20` | Peak CPU % the VM must never exceed to count as idle |
 | `GOV_IDLE_MIN_HOURS` | `72` | Minimum hours of metric data before a VM is judged |
+| `GOV_RBAC_ALLOWED_PRINCIPALS` | *(none)* | Principal object IDs exempt from the broad-role check (break-glass, automation) |
 | `GOV_DRY_RUN` | `true` | Report-only mode |
 
 ## Repository layout
@@ -81,13 +86,13 @@ function_app.py            Azure Functions entry point (timer and HTTP triggers)
 governance/
   config.py                Environment-based settings
   models.py                Finding and ScanReport models
-  azure_clients.py         Resource Graph and Azure Monitor clients, Clients container
+  azure_clients.py         Resource Graph, Azure Monitor and Microsoft Graph clients
   runner.py                Scan orchestration
   cli.py                   Command-line entry point
   scanners/                One module per check
   reporting/teams.py       Adaptive Card builder and webhook client
-tests/                     pytest suite using in-memory Resource Graph and metrics fakes
-scripts/                   Test environment, deployment, Azure Policy assignment
+tests/                     pytest suite using in-memory fakes for every Azure service
+scripts/                   Test environments, deployment, Azure Policy, Graph permissions
 docs/                      Architecture, getting started, roadmap
 ```
 
