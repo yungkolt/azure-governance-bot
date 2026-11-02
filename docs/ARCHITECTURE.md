@@ -18,6 +18,11 @@ flowchart TB
     MI -. Directory.Read.All .-> MSG[(Microsoft Graph)]
     SR --> ARG
     SR --> MSG
+    REG --> SC[cost_anomalies.py]
+    SC --> CM[(Cost Management)]
+    SI --> RP[(Retail Prices API)]
+    RUN --> HIST[reporting/history.py]
+    HIST --> BLOB[(Blob Storage)]
     SG --> ARG[(Azure Resource Graph)]
     SI --> ARG
     SI --> MON[(Azure Monitor<br/>metrics API)]
@@ -39,8 +44,9 @@ flowchart TB
 5. Inventory scanners send one KQL query each to Resource Graph and convert rows into `Finding` objects.
 6. The idle-VM scanner queries Resource Graph for running VMs, then requests 14 days of hourly CPU for each VM from Azure Monitor.
 7. The RBAC scanners read role assignments and definitions from Resource Graph's `authorizationresources` table, then resolve the principals through Microsoft Graph.
-8. Findings are aggregated. An exception in one scanner, or in one VM's metrics call, is logged without stopping the rest.
-9. If a webhook is configured, an Adaptive Card summary is posted to Teams. The HTTP trigger also returns the full report as JSON.
+8. The cost-anomaly scanner reads daily cost per resource group from Cost Management; VM findings are priced from the Retail Prices API.
+9. Findings are aggregated. An exception in one scanner, or in one VM's metrics call, is logged without stopping the rest.
+10. If a storage URL is configured, the report is saved to Blob Storage. If a webhook is configured, an Adaptive Card summary is posted to Teams. The HTTP trigger also returns the full report as JSON.
 
 ## Prevent, then detect
 
@@ -102,6 +108,28 @@ Three checks share one loader (`scanners/rbac.py`):
 
 **Scope of the data.** Resource Graph returns the role assignments visible within the scanned subscriptions. Entra ID directory roles (such as Global Administrator) are a separate system and are not in scope, and neither are PIM *eligible* assignments, which are not standing access.
 
+### Cost analytics
+**Anomaly detection.** For each resource group, the most recent complete day of actual cost is compared with the previous 14 days:
+
+> anomalous when `latest > mean + 3σ` **and** `latest − mean ≥ $5`
+
+| Design choice | Reason |
+|---|---|
+| Standard deviation, not a fixed percentage | Adapts to each group: a volatile group needs a bigger jump than a steady one |
+| Minimum dollar increase | A $0.10 group doubling to $0.20 is not worth anyone's attention |
+| Missing days count as $0 | A group that suddenly starts spending is reported as *new spend* |
+| Today is excluded | Cost data lags usage by roughly 8 to 24 hours, so today is always partial |
+| Not counted as waste | An anomaly may be legitimate growth; severity reflects the cost if the jump became the new normal (increase × 30) |
+| No machine learning | Two weeks of history, no labels, and every flag must be explainable in a sentence. Cost Management's own anomaly alerts exist; this check keeps findings in one report with visible, tested thresholds |
+
+One Cost Management query per subscription returns daily `ActualCost` grouped by resource group. Reader is enough to read it. The Cost Management API is rate-limited more tightly than other ARM APIs, so the check never makes more than one call per subscription per run. Columns are parsed by name, not position, and both `Cost` and `PreTaxCost` are accepted because the column name differs by offer type.
+
+**List prices.** Stopped and idle VMs are priced from the public Retail Prices API (no authentication) using the VM size and region. The price is the Linux pay-as-you-go rate, with Windows, Spot and Low Priority meters excluded. That's the floor of what the VM costs: Windows licensing adds to it, while reservations, savings plans and Azure Hybrid Benefit reduce it. Lookups are cached per run. If the API fails, the finding is still reported without a cost.
+
+Disks, public IPs and App Service Plans keep static per-unit estimates. Managed disks are billed by size tier (P10, E10, S10…) rather than per GB, so an exact price requires mapping each disk to its tier; the estimate is sufficient for ranking.
+
+**History.** Each report is saved as `reports/YYYY/MM/DD/<run_id>.json` in Blob Storage, so trends can be read by date prefix. The Function App's identity writes with Entra ID; the storage account has shared keys disabled.
+
 ### Idle-VM detection
 A VM is idle when **both** hold over the lookback window:
 - average CPU is below `GOV_IDLE_CPU_AVG` (5%)
@@ -141,4 +169,19 @@ Cost-based checks share one set of bands (`scanners/_common.py`): **High** ≥ $
 - Lab scripts that create test users give them random passwords that are never displayed, and the persistent one is disabled.
 
 ## Hosting
-Azure Functions Flex Consumption: scales to zero and bills per execution, which suits a job that runs for seconds once a day. The function timeout is 10 minutes (`host.json`).
+Azure Functions Flex Consumption: scales to zero and bills per execution, which suits a job that runs for seconds once a day. The function timeout is 10 minutes (`host.json`). Python dependencies are built remotely during deployment.
+
+## Infrastructure and delivery
+All infrastructure is Bicep (`infra/`), deployed at subscription scope because the scanner's Reader role is granted on the subscription itself. See [DEPLOYMENT.md](DEPLOYMENT.md) for the full resource list.
+
+| Concern | Approach |
+|---|---|
+| Pipeline authentication | OIDC workload identity federation; the federated credential trusts only the `production` environment of this repository |
+| Pipeline authorization | Contributor plus Role Based Access Control Administrator, constrained by a role-assignment condition to the three roles the template grants |
+| App secrets | Teams webhook in Key Vault, resolved by a Key Vault reference using the app's identity |
+| Storage access | Managed identity only; `allowSharedKeyAccess: false` |
+| Validation | CI lints and builds the Bicep and shellchecks every script on each pull request |
+| Post-deploy check | The pipeline calls `/api/scan` and fails if the app doesn't return a report |
+| Monitoring | Alerts on any failed invocation and on two days without a successful scheduled scan |
+
+The scanner checks its own deployment. The pipeline's broad roles appear in `broad-role-assignment` unless it is allowlisted, which the setup script does explicitly. If the resource group is deleted without removing the subscription-level Reader assignment, the next scan from any other deployment reports it as a stale assignment.

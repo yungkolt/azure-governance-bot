@@ -51,6 +51,25 @@ class Settings:
         default_factory=lambda: _csv("GOV_RBAC_ALLOWED_PRINCIPALS")
     )
 
+    # Cost anomalies: the most recent complete day is compared with the
+    # preceding baseline window. A day is anomalous when it exceeds the baseline
+    # mean by COST_ANOMALY_SIGMA standard deviations AND by at least
+    # COST_ANOMALY_MIN_USD, so tiny absolute changes on cheap groups are ignored.
+    cost_baseline_days: int = field(default_factory=lambda: _int("GOV_COST_BASELINE_DAYS", 14))
+    cost_anomaly_sigma: float = field(default_factory=lambda: _float("GOV_COST_ANOMALY_SIGMA", 3))
+    cost_anomaly_min_usd: float = field(
+        default_factory=lambda: _float("GOV_COST_ANOMALY_MIN_USD", 5)
+    )
+
+    # Report history: when set, every report is saved as JSON to this Blob
+    # Storage account (e.g. https://<account>.blob.core.windows.net).
+    report_storage_url: str | None = field(
+        default_factory=lambda: os.getenv("GOV_REPORT_STORAGE_URL") or None
+    )
+    report_container: str = field(
+        default_factory=lambda: os.getenv("GOV_REPORT_CONTAINER", "reports")
+    )
+
     # Report-only mode. The scanner never modifies resources; remediation is
     # performed by Azure Policy (see scripts/apply-policy.sh).
     dry_run: bool = field(

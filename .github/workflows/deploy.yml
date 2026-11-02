@@ -1,0 +1,83 @@
+name: Deploy
+
+# Runs after CI succeeds on main, or manually. Authenticates to Azure with
+# OpenID Connect workload identity federation: GitHub issues a short-lived token
+# for this repository and environment, Entra ID exchanges it for an Azure token,
+# and no client secret exists anywhere. Set up with scripts/setup-github-oidc.sh.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # request the OIDC token
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Skip when CI failed, and in forks or repos where Azure isn't configured.
+    if: >-
+      vars.AZURE_CLIENT_ID != '' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-24.04
+    environment: production   # the federated credential trusts only this environment
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Log in to Azure (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy infrastructure (Bicep)
+        id: infra
+        env:
+          AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'westus2' }}
+          GOV_OWNER: ${{ vars.GOV_OWNER || 'platform-team' }}
+          GOV_ALERT_EMAIL: ${{ vars.GOV_ALERT_EMAIL }}
+          GOV_RBAC_ALLOWED_PRINCIPALS: ${{ vars.GOV_RBAC_ALLOWED_PRINCIPALS }}
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+        run: |
+          az deployment sub create \
+            --name "governance-bot-${GITHUB_RUN_NUMBER}" \
+            --location "$AZURE_LOCATION" \
+            --template-file infra/main.bicep \
+            --parameters infra/main.bicepparam \
+            --query properties.outputs -o json > outputs.json
+          echo "app=$(jq -r .functionAppName.value outputs.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy code
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ steps.infra.outputs.app }}
+          package: .
+          remote-build: true   # Flex Consumption builds Python dependencies with Oryx
+
+      - name: Smoke test
+        run: |
+          RG=$(jq -r .resourceGroupName.value outputs.json)
+          APP=${{ steps.infra.outputs.app }}
+          KEY=$(az functionapp function keys list -g "$RG" -n "$APP" \
+                  --function-name scan_now --query default -o tsv)
+          HOST=$(az functionapp show -g "$RG" -n "$APP" --query defaultHostName -o tsv)
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS "https://$HOST/api/scan?code=$KEY" -o report.json; then
+              python3 -c "import json; r = json.load(open('report.json')); \
+                print(f\"Scan OK: {r['total_findings']} findings\")"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Smoke test failed" >&2
+          exit 1

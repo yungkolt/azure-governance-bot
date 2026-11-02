@@ -25,15 +25,24 @@
 - Identity lab script for producing each finding in a personal tenant
 - Possible extension: last sign-in date for users (requires `AuditLog.Read.All` and Entra ID P1)
 
-## Phase 4: Cost analytics
-- Daily cost by resource group from the Cost Management Query API
-- Statistical anomaly detection (rolling mean and standard deviation)
-- Azure Retail Prices API replacing static price estimates, including VM compute for stopped and idle VMs
-- Historical reports stored in Blob Storage for trend analysis
+## Phase 4: Cost analytics (complete)
+- Daily actual cost per resource group from the Cost Management Query API
+- Anomaly detection: rolling mean and standard deviation with a minimum dollar threshold; new-spend detection
+- Retail Prices API for stopped and idle VMs (Linux pay-as-you-go list price)
+- Report history in Blob Storage, partitioned by date
 
-## Phase 5: Production readiness
-- Infrastructure as code (Bicep or Terraform) for every resource, role assignment and policy assignment
+## Phase 5: Production readiness (complete)
+- Bicep for every resource and role assignment, deployed at subscription scope
 - GitHub Actions deployment with OIDC workload identity federation (no stored secrets)
-- Key Vault references for configuration secrets
-- Application Insights dashboards and alerts on failed runs
-- Approval workflow in Teams for high-impact remediation
+- Deployment identity constrained by a role-assignment condition
+- Key Vault reference for the Teams webhook; storage with shared keys disabled
+- Application Insights with failed-run and missed-run alerts
+- CI validation of Bicep and shell scripts; post-deploy smoke test
+- End-to-end test script against a real subscription with automatic cleanup
+
+## Possible extensions
+- Per-tier managed disk pricing from the Retail Prices API
+- Week-over-week trend in the Teams card, read from report history
+- Last sign-in date for users in the stale-assignment check (`AuditLog.Read.All`, Entra ID P1)
+- Approval card in Teams before high-impact remediation
+- Management-group scope for multi-subscription organizations

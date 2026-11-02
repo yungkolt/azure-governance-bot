@@ -20,6 +20,14 @@ jobs:
       - name: Test
         run: pytest --cov=governance --cov-report=term-missing
 
-  # Phase 5: add a deploy job here using OIDC federated credentials
-  # (azure/login with client-id/tenant-id/subscription-id, NO client secret),
-  # then Azure/functions-action to publish. See docs/ROADMAP.md.
+  infra:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate Bicep
+        run: |
+          az bicep install
+          az bicep lint --file infra/main.bicep
+          az bicep build --file infra/main.bicep --stdout > /dev/null
+      - name: Check shell scripts
+        run: shellcheck -S warning scripts/*.sh

@@ -1,6 +1,15 @@
 # Getting started
 
-Run these stages in order. Each one adds a single new moving part, so a failure points to one cause.
+## Quick path: the full test run
+```bash
+az login && pip install -r requirements-dev.txt
+./scripts/e2e.sh
+```
+`e2e.sh` runs the unit tests, lint and template checks, takes a baseline scan, creates both test environments, rescans until every expected finding appears, prints PASS or FAIL for each, and **always** deletes what it created, even if it fails or you press Ctrl-C. It takes 5 to 10 minutes and costs a few cents. `SKIP_RBAC=1` skips the identity lab if you don't have User Administrator rights.
+
+The stages below do the same thing by hand, one moving part at a time, which is the better way to learn what each check does.
+
+## Stages
 
 | Stage | Needs Azure | Cost | Changes anything in Azure |
 |---|---|---|---|
@@ -11,7 +20,8 @@ Run these stages in order. Each one adds a single new moving part, so a failure 
 | 5. Identity lab | Yes | Free | Creates test users, a role assignment and a custom role |
 | 6. Local Functions host | Yes | Free | No |
 | 7. Teams report | Yes | Free | No |
-| 8. Deploy | Yes | Low | Creates a Function App |
+| 8. Cost anomalies | Yes | Free | No |
+| 9. Deploy | Yes | Low | Creates the full stack from Bicep |
 
 ## Prerequisites
 - Python 3.11 or later
@@ -143,13 +153,18 @@ The JSON response is the same report the CLI produces.
 2. Copy the generated URL into `TEAMS_WEBHOOK_URL`. Treat it as a secret.
 3. Run `python -m governance.cli --teams`.
 
-## 8. Deploy
-See `scripts/deploy.sh`. Run it a section at a time and check each resource in the portal before moving to the next.
+## 8. Cost anomalies
+The `cost-anomaly` check reads real billing data, so it can't be demonstrated instantly with a test environment: cost data arrives 8 to 24 hours after usage, and a baseline needs days of history. What you can do now:
 
-The RBAC checks need one extra step in Azure, because the Managed Identity starts with no Microsoft Graph access:
 ```bash
-RG=rg-gov-bot NAME=<function-app-name> ./scripts/grant-graph-permissions.sh
+python -m governance.cli -v              # look for the cost-anomaly line in the log
 ```
+- `cost-anomaly: 0 findings` with no warning means the query worked and your spend is steady.
+- To see the detection logic on known data, read `tests/test_cost_anomalies.py`, which covers spikes, noisy groups, new spend and small changes.
+- To see a real anomaly, leave something moderately expensive running for a day in a resource group that normally costs little, wait a day for the data, and scan. Delete it afterwards.
+
+## 9. Deploy
+See [DEPLOYMENT.md](DEPLOYMENT.md): from your machine with `scripts/deploy.sh`, or from GitHub Actions with OIDC. Both use the same Bicep template.
 
 ## Cost safeguard
 Before stage 3, create a budget alert on your subscription (**Cost Management**, then **Budgets**), for example $10 per month with email alerts at 50% and 100%.
@@ -164,4 +179,7 @@ Before stage 3, create a budget alert on your subscription (**Cost Management**,
 | No idle VMs reported | VMs need at least 72 hours of metrics; lower `GOV_IDLE_MIN_HOURS` to test |
 | `Scanner stale-role-assignment failed` with 403 | The identity lacks Microsoft Graph access; run `grant-graph-permissions.sh` |
 | RBAC lab findings missing | Role changes can take several minutes to reach Resource Graph |
+| `Scanner cost-anomaly failed` with 429 | Cost Management throttling; it clears within minutes |
+| `Scanner cost-anomaly failed` with 401 or 403 | The offer type doesn't expose cost data through the API (some sponsored or legacy offers), or the identity lacks Reader |
+| `e2e.sh` times out | Resource Graph is slow to index; rerun with `TIMEOUT=900` |
 | `func start` fails on the timer trigger | Azurite isn't running |

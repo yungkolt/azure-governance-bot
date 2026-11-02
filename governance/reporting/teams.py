@@ -27,6 +27,7 @@ CHECK_LABELS = {
     "broad-role-assignment": "Broad privileged roles",
     "stale-role-assignment": "Stale role assignments",
     "custom-role-wildcard": "Wildcard custom roles",
+    "cost-anomaly": "Cost anomalies",
 }
 TOP_N = 5  # full detail is in the JSON report
 

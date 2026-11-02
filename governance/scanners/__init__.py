@@ -5,6 +5,7 @@ To add a check, write one function and add it to SCANNERS. Nothing else changes.
 """
 
 from governance.scanners.broad_role_assignments import scan_broad_role_assignments
+from governance.scanners.cost_anomalies import scan_cost_anomalies
 from governance.scanners.custom_role_wildcards import scan_custom_role_wildcards
 from governance.scanners.empty_app_service_plans import scan_empty_app_service_plans
 from governance.scanners.idle_vms import scan_idle_vms
@@ -26,7 +27,7 @@ SCANNERS = {
     "broad-role-assignment": scan_broad_role_assignments,
     "stale-role-assignment": scan_stale_role_assignments,
     "custom-role-wildcard": scan_custom_role_wildcards,
-    # Phase 4: "cost-anomaly" (Cost Management API)
+    "cost-anomaly": scan_cost_anomalies,
 }
 
 __all__ = ["SCANNERS"]

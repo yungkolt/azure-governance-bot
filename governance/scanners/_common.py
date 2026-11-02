@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from governance.models import Finding, Severity
+
+log = logging.getLogger(__name__)
 
 
 def finding_from_row(
@@ -29,6 +33,21 @@ def finding_from_row(
         est_monthly_cost_usd=est_monthly_cost_usd,
         details=details or {},
     )
+
+
+HOURS_PER_MONTH = 730
+
+
+def vm_monthly_cost(clients, vm_size: str | None, region: str | None) -> float | None:
+    """Linux pay-as-you-go monthly cost of a VM size, or None if unavailable."""
+    if clients.prices is None or not vm_size or not region:
+        return None
+    try:
+        hourly = clients.prices.vm_hourly_usd(vm_size, region)
+    except Exception:
+        log.warning("Price lookup failed for %s in %s", vm_size, region, exc_info=True)
+        return None
+    return round(hourly * HOURS_PER_MONTH, 2) if hourly is not None else None
 
 
 def severity_for_cost(cost: float | None) -> Severity:

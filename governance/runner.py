@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from governance.azure_clients import Clients
 from governance.config import Settings
 from governance.models import ScanReport
+from governance.reporting.history import save_report
 from governance.reporting.teams import post_to_teams
 from governance.scanners import SCANNERS
 
@@ -33,6 +34,12 @@ def run_scan(clients: Clients, settings: Settings, notify: bool = True) -> ScanR
             report.findings.extend(results)
         except Exception:  # isolate failures so remaining scanners still report
             log.exception("Scanner %s failed", name)
+
+    if settings.report_storage_url:
+        try:
+            save_report(report, settings.report_storage_url, settings.report_container)
+        except Exception:
+            log.exception("Failed to save report history")
 
     if notify and settings.teams_webhook_url:
         try:
