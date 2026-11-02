@@ -6,7 +6,7 @@ by default and continue to bill monthly until they are removed.
 
 from __future__ import annotations
 
-from governance.azure_clients import GraphQuery
+from governance.azure_clients import Clients
 from governance.config import Settings
 from governance.models import Finding, Severity
 
@@ -43,9 +43,9 @@ def estimate_disk_cost(sku: str | None, size_gb: int | None) -> float:
     return round(rate * (size_gb or 0), 2)
 
 
-def scan_orphaned_disks(graph: GraphQuery, settings: Settings) -> list[Finding]:
+def scan_orphaned_disks(clients: Clients, settings: Settings) -> list[Finding]:
     findings: list[Finding] = []
-    for row in graph.query(KQL):
+    for row in clients.graph.query(KQL):
         cost = estimate_disk_cost(row.get("skuName"), row.get("sizeGb"))
         severity = Severity.HIGH if cost >= 50 else Severity.MEDIUM if cost >= 10 else Severity.LOW
         findings.append(

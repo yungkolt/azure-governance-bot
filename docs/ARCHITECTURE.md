@@ -8,25 +8,49 @@ flowchart TB
         TT[scheduled_scan<br/>timer trigger] --> RUN
         HT[scan_now<br/>HTTP trigger, function key] --> RUN
         RUN[runner.run_scan] --> REG[Scanner registry]
-        REG --> S1[untagged.py]
-        REG --> S2[orphaned_disks.py]
+        REG --> SG[Inventory scanners<br/>untagged, disks, IPs,<br/>NICs, plans, stopped VMs]
+        REG --> SI[idle_vms.py]
         RUN --> TEAMS[reporting/teams.py]
     end
-    MI[System-assigned<br/>Managed Identity] -. token .-> ARG
-    S1 --> ARG[(Azure Resource Graph)]
-    S2 --> ARG
+    MI[System-assigned<br/>Managed Identity<br/>Reader] -. token .-> ARG
+    MI -. token .-> MON
+    SG --> ARG[(Azure Resource Graph)]
+    SI --> ARG
+    SI --> MON[(Azure Monitor<br/>metrics API)]
     TEAMS --> WF[Teams Workflow webhook]
     CLI[governance.cli<br/>local] --> RUN
+
+    subgraph Azure Policy
+        DENY[Deny: RG requires owner]
+        MOD[Modify: inherit tags<br/>own identities]
+    end
 ```
 
 ## Request flow
 
 1. A trigger fires: the timer on schedule, the HTTP endpoint on demand, or the CLI locally.
 2. `load_settings()` reads configuration from environment variables.
-3. `run_scan()` creates a `ScanReport` and calls each registered scanner.
-4. Each scanner sends one KQL query to Resource Graph through the `GraphQuery` interface and converts rows into `Finding` objects.
-5. Findings are aggregated. Exceptions in one scanner are logged without stopping the others.
-6. If a webhook is configured, an Adaptive Card summary is posted to Teams. The HTTP trigger also returns the full report as JSON.
+3. `build_clients()` creates one `DefaultAzureCredential` and the clients that share it, in a `Clients` container.
+4. `run_scan()` creates a `ScanReport` and calls each registered scanner with the container.
+5. Inventory scanners send one KQL query each to Resource Graph and convert rows into `Finding` objects.
+6. The idle-VM scanner queries Resource Graph for running VMs, then requests 14 days of hourly CPU for each VM from Azure Monitor.
+7. Findings are aggregated. An exception in one scanner, or in one VM's metrics call, is logged without stopping the rest.
+8. If a webhook is configured, an Adaptive Card summary is posted to Teams. The HTTP trigger also returns the full report as JSON.
+
+## Prevent, then detect
+
+Governance is split between Azure Policy and the scanner according to what each does best.
+
+| Concern | Handled by | Mechanism |
+|---|---|---|
+| Resource group created without `owner` | Policy | **Deny** at create or update time |
+| Resource missing tags its resource group has | Policy | **Modify** adds them on create or update; remediation tasks fix existing resources |
+| Resource missing tags that its resource group lacks too | Scanner | `untagged-resource` |
+| Orphaned, idle or stopped resources | Scanner | Waste checks |
+
+Policy acts at the moment of change, so it stops problems from being created. It cannot judge whether a resource is *used*, so waste detection stays in the scanner. The result: Policy keeps the tagging standard enforced, and the scanner's untagged count trends toward zero while it continues to find waste.
+
+`scripts/apply-policy.sh` supports `ENFORCEMENT=DoNotEnforce`, which evaluates compliance without denying or modifying anything. This is the standard way to roll out a new policy: measure the impact first, then enforce.
 
 ## Design rationale
 
@@ -35,34 +59,55 @@ Enumerating resources through ARM means one call per subscription, resource grou
 
 Trade-off: Resource Graph is eventually consistent, typically within a minute of a change. That is acceptable for a scheduled governance report.
 
+Resource Graph also exposes properties not available from a plain resource listing, such as a VM's power state under `properties.extended.instanceView`, which the stopped-VM and idle-VM checks use.
+
 ### Identity and access
-| Environment | Credential resolved by `DefaultAzureCredential` |
-|---|---|
-| Local | Azure CLI (`az login`) |
-| Azure Functions | System-assigned Managed Identity |
+| Identity | Role | Used for |
+|---|---|---|
+| Function App system-assigned identity | Reader (subscription) | Resource Graph queries, metric reads |
+| Each Policy Modify assignment's identity | Roles declared by the policy definition | Writing inherited tags |
+| Developer (local) | Your own `az login` session | Running the CLI |
 
-The identity holds **Reader** at subscription scope. Resource Graph returns only resources the caller can read, so scope is controlled by RBAC rather than application logic. Later phases that need write access will use a custom role scoped to the specific actions required.
+`DefaultAzureCredential` resolves the Azure CLI session locally and the Managed Identity in Azure. Resource Graph returns only resources the caller can read, so scope is controlled by RBAC rather than application logic.
 
-### Abstraction for testing
-Scanners depend on the `GraphQuery` protocol, not on the Azure SDK. Tests inject `FakeGraph`, which returns fixed rows, so the full suite runs offline in milliseconds. The SDK is imported lazily inside `ResourceGraph.__init__`.
+No custom RBAC role is needed. Reader already includes `Microsoft.Insights/metrics/read`, and the scanner never writes. Write access is held only by Policy's own identities, each scoped to one assignment. `apply-policy.sh` reads the required roles from the definition's `roleDefinitionIds` so the grant always matches what the policy needs. `POLICY_ROLE` can override it with a narrower role such as Tag Contributor.
+
+### Dependency injection
+Scanners take a `Clients` container instead of constructing SDK clients. The container holds `graph` (the `GraphQuery` protocol) and `metrics` (the `MetricsQuery` protocol). Tests inject `FakeGraph` and `FakeMetrics`, so the suite runs offline in milliseconds. Phase 3 (Microsoft Graph) and Phase 4 (Cost Management) add fields to the same container without changing existing scanners.
+
+### Idle-VM detection
+A VM is idle when **both** hold over the lookback window:
+- average CPU is below `GOV_IDLE_CPU_AVG` (5%)
+- peak hourly CPU never exceeded `GOV_IDLE_CPU_MAX` (20%)
+
+The peak condition prevents flagging a VM that is quiet all day but runs a heavy nightly job. VMs with fewer than `GOV_IDLE_MIN_HOURS` (72) of data are skipped so a newly created VM isn't judged on a few hours of history.
+
+CPU alone cannot prove a VM is unneeded. A domain controller or licence server can be essential at 1% CPU. Idle findings are therefore recommendations to review, and nothing acts on them automatically.
+
+Metrics come from the ARM metrics API through `azure-mgmt-monitor`. Platform metrics like `Percentage CPU` require no agent. (Metrics support was removed from `azure-monitor-query` in version 2.0.) The scanner makes one metrics call per running VM. That is fine for hundreds of VMs. Very large estates would move to the regional metrics batch API.
 
 ### Tag evaluation in Python
 Azure tag names are case-insensitive, but Resource Graph returns them as stored. The untagged scanner retrieves tags and compares them case-insensitively in Python. Values that are only whitespace count as missing. At very large estates this filter could move into KQL to reduce payload size.
 
 ### Cost estimation
-Orphaned-disk cost uses a static per-GB price table to rank findings by impact. It is an estimate and is labelled as one. Phase 4 replaces it with the Azure Retail Prices API and actual cost from Cost Management.
+Disk, public IP and App Service Plan costs use static list-price tables to rank findings by impact. They are estimates and are labelled as such. Stopped VMs carry no estimate because VM pricing varies too widely by size, region and OS. Phase 4 replaces estimates with the Azure Retail Prices API and actual cost from Cost Management.
 
 ### Severity
-| Check | High | Medium | Low |
-|---|---|---|---|
-| Orphaned disk | ≥ $50/month | ≥ $10/month | < $10/month |
-| Untagged resource | n/a | Missing all required tags | Missing some |
+Cost-based checks share one set of bands (`scanners/_common.py`): **High** ≥ $50/month, **Medium** ≥ $10/month, **Low** < $10/month.
+
+| Check | Severity rule |
+|---|---|
+| Orphaned disk, public IP, empty App Service Plan | Cost bands |
+| Orphaned NIC | Medium if it still holds a public IP, otherwise Low |
+| Stopped but not deallocated VM | Always High (full compute cost for no work) |
+| Idle VM | Medium (needs human review) |
+| Untagged resource | Medium if missing all required tags, Low if missing some |
 
 ## Security considerations
 - No secrets in source or app settings. The Teams webhook URL is intended to be a Key Vault reference.
 - The HTTP trigger requires a function key (`AuthLevel.FUNCTION`).
 - The webhook client rejects non-HTTPS URLs.
-- The scanner is read-only. `GOV_DRY_RUN` defaults to `true`.
+- The scanner is read-only. Write access lives only with Policy assignment identities.
 
 ## Hosting
 Azure Functions Flex Consumption: scales to zero and bills per execution, which suits a job that runs for seconds once a day. The function timeout is 10 minutes (`host.json`).

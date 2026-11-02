@@ -13,7 +13,7 @@ import logging
 
 import azure.functions as func
 
-from governance.azure_clients import ResourceGraph
+from governance.azure_clients import build_clients
 from governance.config import load_settings
 from governance.runner import run_scan
 
@@ -26,7 +26,7 @@ def scheduled_scan(timer: func.TimerRequest) -> None:
     if timer.past_due:
         logging.warning("Timer is past due; running anyway")
     settings = load_settings()
-    report = run_scan(ResourceGraph(settings.subscription_ids), settings, notify=True)
+    report = run_scan(build_clients(settings.subscription_ids), settings, notify=True)
     logging.info("Scan %s complete: %d findings, ~$%s/mo waste",
                  report.run_id, len(report.findings), report.total_est_monthly_waste)
 
@@ -36,7 +36,7 @@ def scheduled_scan(timer: func.TimerRequest) -> None:
 def scan_now(req: func.HttpRequest) -> func.HttpResponse:
     settings = load_settings()
     notify = req.params.get("notify", "false").lower() == "true"
-    report = run_scan(ResourceGraph(settings.subscription_ids), settings, notify=notify)
+    report = run_scan(build_clients(settings.subscription_ids), settings, notify=notify)
     return func.HttpResponse(
         json.dumps(report.to_dict(), indent=2), mimetype="application/json", status_code=200
     )

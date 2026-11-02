@@ -8,8 +8,8 @@ def test_cost_estimate():
     assert estimate_disk_cost(None, None) == 0.0
 
 
-def test_scan_orphaned_disks(graph, settings):
-    findings = scan_orphaned_disks(graph, settings)
+def test_scan_orphaned_disks(clients, settings):
+    findings = scan_orphaned_disks(clients, settings)
     by_name = {f.resource_name: f for f in findings}
 
     assert by_name["old-vm_OsDisk"].severity == Severity.HIGH
@@ -17,6 +17,6 @@ def test_scan_orphaned_disks(graph, settings):
     assert by_name["tiny-data"].severity == Severity.LOW
 
 
-def test_query_only_targets_unattached(graph, settings):
-    scan_orphaned_disks(graph, settings)
+def test_query_only_targets_unattached(clients, graph, settings):
+    scan_orphaned_disks(clients, settings)
     assert "Unattached" in graph.queries[0]

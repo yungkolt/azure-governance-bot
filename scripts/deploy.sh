@@ -9,7 +9,9 @@ STORAGE=${STORAGE:-stgovbot$RANDOM}
 SUB_ID=$(az account show --query id -o tsv)
 
 # --- Infrastructure -------------------------------------------------------
-az group create -n "$RG" -l "$LOC" -o none
+# Tagged so it passes the resource-group deny policy from apply-policy.sh.
+az group create -n "$RG" -l "$LOC" \
+  --tags owner="${OWNER:-platform-team}" environment=prod costCenter=platform -o none
 az storage account create -g "$RG" -n "$STORAGE" --sku Standard_LRS -o none
 
 # Flex Consumption = serverless, scales to zero, you pay per execution.
@@ -22,8 +24,9 @@ az functionapp create -g "$RG" -n "$NAME" \
 # System-assigned managed identity: Azure issues and rotates the credential.
 PRINCIPAL_ID=$(az functionapp identity assign -g "$RG" -n "$NAME" --query principalId -o tsv)
 
-# Least privilege: Reader is enough for Resource Graph in Phase 1.
-# (Phase 2 adds a CUSTOM role with only the extra actions needed for remediation.)
+# Least privilege: Reader covers Resource Graph queries and Azure Monitor metric
+# reads. The scanner never writes; tag fixes are made by Azure Policy's own
+# identities (scripts/apply-policy.sh), so no custom role is needed.
 az role assignment create --assignee-object-id "$PRINCIPAL_ID" \
   --assignee-principal-type ServicePrincipal \
   --role Reader --scope "/subscriptions/$SUB_ID" -o none
