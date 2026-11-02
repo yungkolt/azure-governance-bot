@@ -2,7 +2,7 @@
 
 Serverless governance and cost-optimization scanner for Microsoft Azure. It inventories every in-scope subscription through Azure Resource Graph, detects governance gaps and wasted spend, and publishes a summary to Microsoft Teams.
 
-![CI](https://github.com/OWNER/azure-governance-bot/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/yungkolt/azure-governance-bot/actions/workflows/ci.yml/badge.svg)
 
 ```mermaid
 flowchart LR
