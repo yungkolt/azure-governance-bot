@@ -7,6 +7,10 @@ narrowest scope that works, to groups rather than individual users, and
 ideally as just-in-time Privileged Identity Management (PIM) eligibility
 rather than a standing assignment.
 
+Access-granting roles constrained by a role assignment condition, for example
+an RBAC Administrator that may only grant Reader, are still reported but at
+medium severity: the holder can't grant itself or others arbitrary access.
+
 Principals that legitimately need broad access, such as break-glass accounts
 or automation identities, are exempted with GOV_RBAC_ALLOWED_PRINCIPALS.
 """
@@ -36,15 +40,19 @@ def scan_broad_role_assignments(clients: Clients, settings: Settings) -> list[Fi
     findings: list[Finding] = []
     for a in broad:
         direct_user = a.principal_type.lower() == "user"
+        access_granting = a.role_id in ACCESS_GRANTING
         message = f"{a.role_name} at {a.level} scope"
+        if access_granting and a.conditional:
+            message += "; constrained by a role assignment condition"
         if direct_user:
             message += "; assigned directly to a user (prefer a group or PIM eligibility)"
+        high = access_granting and not a.conditional
         findings.append(
             assignment_finding(
                 a,
                 principals.get(a.principal_id),
                 check="broad-role-assignment",
-                severity=Severity.HIGH if a.role_id in ACCESS_GRANTING else Severity.MEDIUM,
+                severity=Severity.HIGH if high else Severity.MEDIUM,
                 message=message,
                 extra={"direct_user_assignment": direct_user},
             )

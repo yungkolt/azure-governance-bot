@@ -31,7 +31,7 @@ flowchart LR
 | | `idle-vm` | Running VMs with low average and low peak CPU over 14 days, with their monthly cost |
 | Governance | `untagged-resource` | Resources missing required ownership or cost-allocation tags |
 | | Azure Policy | Deny resource groups without `owner`; inherit tags from the resource group; remediate existing resources |
-| Identity | `broad-role-assignment` | Owner, Contributor or access-granting roles at subscription, management-group or root scope |
+| Identity | `broad-role-assignment` | Owner, Contributor or access-granting roles at subscription, management-group or root scope; access-granting roles limited by a role assignment condition are reported at lower severity |
 | | `stale-role-assignment` | Role assignments held by deleted principals or disabled users |
 | | `custom-role-wildcard` | Custom roles granting `*` or provider-wide wildcard actions |
 | Cost | `cost-anomaly` | A resource group's daily spend far outside its 14-day baseline, or brand-new spend |

@@ -32,7 +32,8 @@ authorizationresources
           principalType    = tostring(properties.principalType),
           scope            = tostring(properties.scope),
           roleDefinitionId = tostring(properties.roleDefinitionId),
-          createdOn        = tostring(properties.createdOn)
+          createdOn        = tostring(properties.createdOn),
+          condition        = tostring(properties.condition)
 """
 
 DEFINITIONS_KQL = """
@@ -77,6 +78,7 @@ class RoleAssignment:
     role_id: str               # lowercase role definition GUID
     role_name: str
     created_on: str | None = None
+    condition: str | None = None   # ABAC condition, e.g. limits which roles can be granted
 
     @property
     def level(self) -> str:
@@ -85,6 +87,10 @@ class RoleAssignment:
     @property
     def privileged(self) -> bool:
         return self.role_id in PRIVILEGED
+
+    @property
+    def conditional(self) -> bool:
+        return bool(self.condition)
 
 
 def role_guid(role_definition_id: str | None) -> str:
@@ -146,6 +152,7 @@ def load_assignments(clients: Clients) -> list[RoleAssignment]:
                 role_id=guid,
                 role_name=names.get(guid, guid),
                 created_on=row.get("createdOn"),
+                condition=row.get("condition") or None,
             )
         )
     return assignments
@@ -161,6 +168,17 @@ def resolve_principals(clients: Clients, ids: list[str]) -> dict[str, Principal]
         log.warning("Microsoft Graph lookup failed; findings will show principal IDs only",
                     exc_info=True)
         return {}
+
+
+def scope_label(a: RoleAssignment) -> str:
+    """Where an assignment above resource-group level applies, for display.
+
+    Subscription-level findings include a short subscription ID so assignments
+    in different subscriptions can be told apart in the CLI and Teams output.
+    """
+    if a.level == "subscription" and a.subscription_id:
+        return f"(subscription {a.subscription_id[:8]})"
+    return f"({a.level})"
 
 
 def principal_label(assignment: RoleAssignment, principal: Principal | None) -> str:
@@ -185,7 +203,7 @@ def assignment_finding(
         resource_id=a.id,
         resource_name=principal_label(a, principal),
         resource_type="microsoft.authorization/roleassignments",
-        resource_group=rg or f"({a.level})",
+        resource_group=rg or scope_label(a),
         subscription_id=a.subscription_id,
         message=message,
         details={
@@ -197,6 +215,7 @@ def assignment_finding(
             "scope": a.scope,
             "scope_level": a.level,
             "created_on": a.created_on,
+            "conditional": a.conditional,
             **(extra or {}),
         },
     )

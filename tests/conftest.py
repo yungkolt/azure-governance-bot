@@ -108,6 +108,7 @@ SUB_SCOPE = f"/subscriptions/{SUB}"
 OWNER = "8e3af657-a8ff-443c-a75c-2fe8c4bcb635"
 CONTRIBUTOR = "b24988ac-6180-42a0-ab88-20f7382dd24c"
 READER = "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+RBAC_ADMIN = "f58310d9-a9f6-439a-9e8d-f62e7b41a168"
 CUSTOM_VM = "11111111-1111-1111-1111-111111111111"
 CUSTOM_ALL = "22222222-2222-2222-2222-222222222222"
 CUSTOM_SAFE = "33333333-3333-3333-3333-333333333333"
@@ -122,14 +123,23 @@ SP_POLICY = "cccccccc-0000-0000-0000-000000000002"   # policy identity (allowlis
 FOREIGN = "dddddddd-0000-0000-0000-000000000001"     # Lighthouse group
 
 
-def assignment(n, principal, ptype, scope, role):
+def assignment(n, principal, ptype, scope, role, condition=""):
     return {
         "id": f"{scope}/providers/Microsoft.Authorization/roleAssignments/ra-{n}",
         "subscriptionId": SUB, "principalId": principal, "principalType": ptype,
         "scope": scope,
         "roleDefinitionId": f"{SUB_SCOPE}/providers/Microsoft.Authorization/roleDefinitions/{role}",
         "createdOn": "2025-06-01T00:00:00Z",
+        "condition": condition,    # ARG returns "" when no condition is set
     }
+
+
+# Constrained delegation: may only assign or remove Reader.
+READER_ONLY_CONDITION = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+    f"ForAnyOfAnyValues:GuidEquals {{{READER}}}))"
+)
 
 
 ROLE_ASSIGNMENTS = [
@@ -145,6 +155,8 @@ ROLE_ASSIGNMENTS = [
     assignment(10, G_OPS, "Group",
                "/providers/Microsoft.Management/managementGroups/mg-root", CONTRIBUTOR),
     assignment(11, SP_APP, "ServicePrincipal", f"{SUB_SCOPE}/resourceGroups/rg-app", KV_SECRETS),
+    assignment(12, SP_APP, "ServicePrincipal", SUB_SCOPE, RBAC_ADMIN,      # broad, conditional
+               condition=READER_ONLY_CONDITION),
     assignment(1, U_ALICE, "User", SUB_SCOPE, OWNER),    # duplicate row, as ARG can return
 ]
 
