@@ -77,6 +77,7 @@ resource scannerReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 
 output resourceGroupName string = rg.name
 output functionAppName string = app.outputs.functionAppName
+output functionAppHostName string = app.outputs.functionAppHostName
 output principalId string = app.outputs.principalId
 output keyVaultName string = app.outputs.keyVaultName
 output storageAccountName string = app.outputs.storageAccountName

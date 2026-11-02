@@ -257,6 +257,7 @@ resource missedRunAlert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-previ
 }
 
 output functionAppName string = functionApp.name
+output functionAppHostName string = functionApp.properties.defaultHostName
 output principalId string = functionApp.identity.principalId
 output keyVaultName string = vault.name
 output storageAccountName string = storage.name
