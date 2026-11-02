@@ -65,19 +65,30 @@ jobs:
           remote-build: true   # Flex Consumption builds Python dependencies with Oryx
 
       - name: Smoke test
+        # A fresh deployment can take a few minutes to start: the identity's
+        # storage role has to propagate and the host has to index functions.
+        # Everything that can be briefly unavailable is retried for ~6 minutes.
         run: |
           RG=$(jq -r .resourceGroupName.value outputs.json)
-          APP=${{ steps.infra.outputs.app }}
-          KEY=$(az functionapp function keys list -g "$RG" -n "$APP" \
-                  --function-name scan_now --query default -o tsv)
-          HOST=$(az functionapp show -g "$RG" -n "$APP" --query defaultHostName -o tsv)
-          for attempt in 1 2 3 4 5 6; do
-            if curl -fsS "https://$HOST/api/scan?code=$KEY" -o report.json; then
-              python3 -c "import json; r = json.load(open('report.json')); \
-                print(f\"Scan OK: {r['total_findings']} findings\")"
-              exit 0
+          APP=$(jq -r .functionAppName.value outputs.json)
+          HOST=$(jq -r .functionAppHostName.value outputs.json)
+          [[ -n "$HOST" && "$HOST" != "null" ]] || { echo "No host name in deployment outputs" >&2; exit 1; }
+          for attempt in $(seq 1 12); do
+            KEY=$(az functionapp function keys list -g "$RG" -n "$APP" \
+                    --function-name scan_now --query default -o tsv 2>/dev/null || true)
+            if [[ -n "$KEY" ]]; then
+              STATUS=$(curl -sS -o report.json -w "%{http_code}" --max-time 120 \
+                         "https://$HOST/api/scan?code=$KEY" || echo "000")
+              if [[ "$STATUS" == "200" ]]; then
+                python3 -c "import json; r = json.load(open('report.json')); \
+                  print(f\"Scan OK: {r['total_findings']} findings\")"
+                exit 0
+              fi
+              echo "Attempt $attempt: HTTP $STATUS"
+            else
+              echo "Attempt $attempt: function key not available yet"
             fi
-            sleep 20
+            sleep 30
           done
-          echo "Smoke test failed" >&2
+          echo "Smoke test failed after 12 attempts" >&2
           exit 1

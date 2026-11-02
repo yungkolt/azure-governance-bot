@@ -19,6 +19,7 @@ OUTPUTS=$(az deployment sub create \
 
 RG=$(jq -r .resourceGroupName.value <<<"$OUTPUTS")
 APP=$(jq -r .functionAppName.value <<<"$OUTPUTS")
+HOST=$(jq -r .functionAppHostName.value <<<"$OUTPUTS")
 echo "Infrastructure ready: $APP in $RG"
 
 echo "Publishing code..."
@@ -31,7 +32,7 @@ Grant Microsoft Graph access once, for the identity checks:
   RG=$RG NAME=$APP ./scripts/grant-graph-permissions.sh
 Run a scan now:
   KEY=\$(az functionapp function keys list -g $RG -n $APP --function-name scan_now --query default -o tsv)
-  curl "https://\$(az functionapp show -g $RG -n $APP --query defaultHostName -o tsv)/api/scan?code=\$KEY"
+  curl "https://$HOST/api/scan?code=\$KEY"
 Remove everything:
   az group delete -n $RG --yes
 EOF

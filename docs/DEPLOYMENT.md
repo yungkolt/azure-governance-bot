@@ -68,7 +68,9 @@ The deploy job is skipped automatically when `AZURE_CLIENT_ID` isn't configured,
 # trigger a scan and see the JSON report
 RG=rg-gov-bot; APP=<function-app-name>
 KEY=$(az functionapp function keys list -g $RG -n $APP --function-name scan_now --query default -o tsv)
-curl "https://$(az functionapp show -g $RG -n $APP --query defaultHostName -o tsv)/api/scan?code=$KEY"
+# Flex Consumption apps don't return defaultHostName from `az functionapp show`; read it from the resource
+HOST=$(az resource show -g $RG -n $APP --resource-type Microsoft.Web/sites --query properties.defaultHostName -o tsv)
+curl "https://$HOST/api/scan?code=$KEY"
 
 # report history
 az storage blob list --account-name <storage-account> -c reports --auth-mode login -o table
