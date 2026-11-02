@@ -15,6 +15,14 @@ def _csv(name: str, default: str = "") -> list[str]:
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
+def _int(name: str, default: int) -> int:
+    return int(os.getenv(name, str(default)))
+
+
+def _float(name: str, default: float) -> float:
+    return float(os.getenv(name, str(default)))
+
+
 @dataclass
 class Settings:
     # Which subscriptions to scan. Empty = every subscription the identity can see.
@@ -28,7 +36,17 @@ class Settings:
     # Teams Workflows webhook URL. Store in Key Vault in production.
     teams_webhook_url: str | None = field(default_factory=lambda: os.getenv("TEAMS_WEBHOOK_URL"))
 
-    # Report-only mode. Phase 1 never modifies resources.
+    # Idle-VM detection: a running VM is idle when average CPU over the lookback
+    # window is below IDLE_CPU_AVG and it never exceeded IDLE_CPU_MAX.
+    # VMs with fewer than IDLE_MIN_HOURS of metric data are skipped so a newly
+    # created VM is not flagged before it has a usage history.
+    idle_lookback_days: int = field(default_factory=lambda: _int("GOV_IDLE_LOOKBACK_DAYS", 14))
+    idle_cpu_avg: float = field(default_factory=lambda: _float("GOV_IDLE_CPU_AVG", 5))
+    idle_cpu_max: float = field(default_factory=lambda: _float("GOV_IDLE_CPU_MAX", 20))
+    idle_min_hours: int = field(default_factory=lambda: _int("GOV_IDLE_MIN_HOURS", 72))
+
+    # Report-only mode. The scanner never modifies resources; remediation is
+    # performed by Azure Policy (see scripts/apply-policy.sh).
     dry_run: bool = field(
         default_factory=lambda: os.getenv("GOV_DRY_RUN", "true").lower() != "false"
     )

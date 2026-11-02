@@ -6,6 +6,10 @@
     "GOV_SCHEDULE": "0 0 14 * * 1-5",
     "GOV_SUBSCRIPTION_IDS": "",
     "GOV_REQUIRED_TAGS": "owner,environment,costCenter",
+    "GOV_IDLE_LOOKBACK_DAYS": "14",
+    "GOV_IDLE_CPU_AVG": "5",
+    "GOV_IDLE_CPU_MAX": "20",
+    "GOV_IDLE_MIN_HOURS": "72",
     "GOV_DRY_RUN": "true",
     "TEAMS_WEBHOOK_URL": ""
   }

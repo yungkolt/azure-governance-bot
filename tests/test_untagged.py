@@ -14,8 +14,8 @@ def test_none_tags():
     assert missing_tags(None, ["owner", "env"]) == ["owner", "env"]
 
 
-def test_scan_flags_only_bad_resources(graph, settings):
-    findings = scan_untagged_resources(graph, settings)
+def test_scan_flags_only_bad_resources(clients, settings):
+    findings = scan_untagged_resources(clients, settings)
     names = {f.resource_name: f for f in findings}
 
     assert set(names) == {"stnotags", "kv-partial"}          # good one + excluded one skipped

@@ -10,7 +10,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-from governance.azure_clients import GraphQuery
+from governance.azure_clients import Clients
 from governance.config import Settings
 from governance.models import ScanReport
 from governance.reporting.teams import post_to_teams
@@ -19,7 +19,7 @@ from governance.scanners import SCANNERS
 log = logging.getLogger(__name__)
 
 
-def run_scan(graph: GraphQuery, settings: Settings, notify: bool = True) -> ScanReport:
+def run_scan(clients: Clients, settings: Settings, notify: bool = True) -> ScanReport:
     report = ScanReport(
         run_id=str(uuid.uuid4()),
         started_at=datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
@@ -28,7 +28,7 @@ def run_scan(graph: GraphQuery, settings: Settings, notify: bool = True) -> Scan
 
     for name, scanner in SCANNERS.items():
         try:
-            results = scanner(graph, settings)
+            results = scanner(clients, settings)
             log.info("%s: %d findings", name, len(results))
             report.findings.extend(results)
         except Exception:  # isolate failures so remaining scanners still report

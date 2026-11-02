@@ -12,7 +12,7 @@ import argparse
 import json
 import logging
 
-from governance.azure_clients import ResourceGraph
+from governance.azure_clients import build_clients
 from governance.config import load_settings
 from governance.runner import run_scan
 
@@ -30,7 +30,7 @@ def main() -> None:
     logging.getLogger("azure").setLevel(logging.WARNING)
 
     settings = load_settings()
-    report = run_scan(ResourceGraph(settings.subscription_ids), settings, notify=args.teams)
+    report = run_scan(build_clients(settings.subscription_ids), settings, notify=args.teams)
 
     print(f"\nRun {report.run_id}  ({report.started_at})")
     for check, items in sorted(report.by_check().items()):

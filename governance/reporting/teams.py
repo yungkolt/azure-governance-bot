@@ -19,6 +19,11 @@ log = logging.getLogger(__name__)
 CHECK_LABELS = {
     "untagged-resource": "Untagged resources",
     "orphaned-disk": "Orphaned disks",
+    "orphaned-public-ip": "Orphaned public IPs",
+    "orphaned-nic": "Orphaned NICs",
+    "empty-app-service-plan": "Empty App Service Plans",
+    "stopped-not-deallocated-vm": "Stopped (still billing) VMs",
+    "idle-vm": "Idle VMs",
 }
 TOP_N = 5  # full detail is in the JSON report
 

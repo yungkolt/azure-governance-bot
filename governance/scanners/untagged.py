@@ -7,7 +7,7 @@ allocated.
 
 from __future__ import annotations
 
-from governance.azure_clients import GraphQuery
+from governance.azure_clients import Clients
 from governance.config import Settings
 from governance.models import Finding, Severity
 
@@ -38,9 +38,9 @@ def missing_tags(tags: dict | None, required: list[str]) -> list[str]:
     return [t for t in required if t.lower() not in present]
 
 
-def scan_untagged_resources(graph: GraphQuery, settings: Settings) -> list[Finding]:
+def scan_untagged_resources(clients: Clients, settings: Settings) -> list[Finding]:
     findings: list[Finding] = []
-    for row in graph.query(KQL):
+    for row in clients.graph.query(KQL):
         if row["type"] in EXCLUDED_TYPES:
             continue
         missing = missing_tags(row.get("tags"), settings.required_tags)
