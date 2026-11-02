@@ -48,7 +48,7 @@ REPO=<github-user>/azure-governance-bot ./scripts/setup-github-oidc.sh
 ```
 The script:
 1. Creates an app registration and service principal for the pipeline.
-2. Adds a **federated credential** that trusts tokens only from this repository's `production` environment. GitHub signs a short-lived token per run; Entra ID exchanges it for an Azure token. No secret is ever created.
+2. Adds **federated credentials** that trust tokens only from this repository's `production` environment. GitHub signs a short-lived token per run; Entra ID exchanges it for an Azure token. No secret is ever created. Entra ID matches the token's subject claim exactly, and GitHub may issue it as `repo:owner/name:environment:production` or, including the immutable owner and repository IDs, `repo:owner@123/name@456:environment:production`. The script trusts both.
 3. Grants **Contributor** and **Role Based Access Control Administrator**, the latter with a **condition** that allows assigning or removing only Reader, Storage Blob Data Owner and Key Vault Secrets User. Even a compromised workflow cannot grant itself Owner.
 4. Creates the `production` environment and the repository variables the workflow reads, including `GOV_RBAC_ALLOWED_PRINCIPALS` set to the pipeline's own principal, because it legitimately holds broad roles.
 
@@ -61,6 +61,13 @@ Optional repository variables: `GOV_OWNER`, `GOV_ALERT_EMAIL`, `AZURE_LOCATION`.
 | `deploy.yml` | CI succeeding on `main`, or manual | OIDC login, `az deployment sub create`, code deploy with remote build, smoke test against `/api/scan` |
 
 The deploy job is skipped automatically when `AZURE_CLIENT_ID` isn't configured, so forks and fresh clones don't fail. In GitHub, you can add required reviewers to the `production` environment so every deployment waits for approval.
+
+### Troubleshooting the login
+| Error | Cause | Fix |
+|---|---|---|
+| `AADSTS700213: No matching federated identity record found for presented assertion subject` | The token's subject differs from every federated credential | Copy the subject from the error and add a credential for it, or rerun `setup-github-oidc.sh` |
+| `AADSTS70021` or audience errors | Audience isn't `api://AzureADTokenExchange` | Recreate the credential with the default audience |
+| `AuthorizationFailed` during deployment | Role assignments haven't propagated | Wait a few minutes and rerun the job |
 
 ## After deploying
 

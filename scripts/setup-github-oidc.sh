@@ -3,7 +3,9 @@
 # secret is created, stored or rotated.
 #
 #   1. App registration + service principal for the pipeline.
-#   2. Federated credential trusting only this repo's `production` environment.
+#   2. Federated credentials trusting only this repo's `production` environment,
+#      in both subject formats GitHub issues: name-based
+#      (repo:owner/name:...) and ID-based (repo:owner@id/name@id:...).
 #   3. Roles on the subscription:
 #        Contributor                               - deploy resources
 #        Role Based Access Control Administrator   - create role assignments,
@@ -33,18 +35,36 @@ if [[ -z "$SP_ID" ]]; then
   SP_ID=$(az ad sp create --id "$APP_ID" --query id -o tsv)
 fi
 
-# --- 2. Federated credential -------------------------------------------------
-SUBJECT="repo:$REPO:environment:$ENVIRONMENT"
-EXISTING=$(az ad app federated-credential list --id "$APP_ID" \
-  --query "[?subject=='$SUBJECT'] | length(@)" -o tsv)
-if [[ "$EXISTING" == "0" ]]; then
-  az ad app federated-credential create --id "$APP_ID" -o none --parameters "{
-    \"name\": \"github-$ENVIRONMENT\",
-    \"issuer\": \"https://token.actions.githubusercontent.com\",
-    \"subject\": \"$SUBJECT\",
-    \"audiences\": [\"api://AzureADTokenExchange\"]
-  }"
-  echo "Trusting GitHub tokens for $SUBJECT"
+# --- 2. Federated credentials --------------------------------------------------
+# Entra ID matches the token's subject claim exactly. GitHub issues either the
+# name-based form or a form that includes the immutable numeric IDs of the owner
+# and repository (which a re-created repo with the same name cannot reuse), so
+# both are trusted. Each is still limited to this repo's one environment.
+add_credential() {   # name, subject
+  local existing
+  existing=$(az ad app federated-credential list --id "$APP_ID" \
+    --query "[?subject=='$2'] | length(@)" -o tsv)
+  if [[ "$existing" == "0" ]]; then
+    az ad app federated-credential create --id "$APP_ID" -o none --parameters "{
+      \"name\": \"$1\",
+      \"issuer\": \"https://token.actions.githubusercontent.com\",
+      \"subject\": \"$2\",
+      \"audiences\": [\"api://AzureADTokenExchange\"]
+    }"
+    echo "Trusting GitHub tokens for $2"
+  fi
+}
+
+OWNER=${REPO%%/*}
+NAME=${REPO##*/}
+add_credential "github-$ENVIRONMENT" "repo:$REPO:environment:$ENVIRONMENT"
+if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
+  OWNER_ID=$(gh api "users/$OWNER" --jq .id)
+  REPO_ID=$(gh api "repos/$REPO" --jq .id)
+  add_credential "github-$ENVIRONMENT-ids" \
+    "repo:$OWNER@$OWNER_ID/$NAME@$REPO_ID:environment:$ENVIRONMENT"
+else
+  echo "gh CLI unavailable: add the ID-based subject from a failed login error if needed" >&2
 fi
 
 # --- 3. Roles ------------------------------------------------------------------
