@@ -15,6 +15,7 @@ from tests.conftest import (
     U_DISABLED,
     U_GONE,
     FakeDirectory,
+    FakeRoles,
 )
 
 
@@ -134,3 +135,22 @@ def test_role_queries_are_shared(clients, graph, settings):
     scan_broad_role_assignments(clients, settings)
     scan_custom_role_wildcards(clients, settings)
     assert all("authorizationresources" in q for q in graph.queries)
+
+
+# --- role names and de-duplication -----------------------------------------
+
+def test_built_in_role_names_from_authorization_api(clients):
+    names = {a.id.rsplit("/", 1)[-1]: a.role_name for a in load_assignments(clients)}
+    assert names["ra-11"] == "Key Vault Secrets User"
+
+
+def test_role_names_fall_back_when_api_fails(graph):
+    clients = Clients(graph=graph, roles=FakeRoles(fail=True))
+    names = {a.id.rsplit("/", 1)[-1]: a.role_name for a in load_assignments(clients)}
+    assert names["ra-1"] == "Owner"                       # hardcoded built-in still named
+    assert names["ra-11"] == "4633458b-17de-408a-b874-0445c86b69e6"   # GUID as last resort
+
+
+def test_duplicate_assignment_rows_are_collapsed(clients):
+    ids = [a.id for a in load_assignments(clients)]
+    assert len(ids) == len(set(ids)) == 11

@@ -109,6 +109,7 @@ READER = "acdd72a7-3385-48ef-bd42-f606fba81ae7"
 CUSTOM_VM = "11111111-1111-1111-1111-111111111111"
 CUSTOM_ALL = "22222222-2222-2222-2222-222222222222"
 CUSTOM_SAFE = "33333333-3333-3333-3333-333333333333"
+KV_SECRETS = "4633458b-17de-408a-b874-0445c86b69e6"   # built-in, not in ARG definitions
 
 U_ALICE = "aaaaaaaa-0000-0000-0000-000000000001"     # active user
 U_GONE = "aaaaaaaa-0000-0000-0000-000000000002"      # deleted user
@@ -141,6 +142,8 @@ ROLE_ASSIGNMENTS = [
     assignment(9, FOREIGN, "ForeignGroup", SUB_SCOPE, CONTRIBUTOR),         # broad, not stale
     assignment(10, G_OPS, "Group",
                "/providers/Microsoft.Management/managementGroups/mg-root", CONTRIBUTOR),
+    assignment(11, SP_APP, "ServicePrincipal", f"{SUB_SCOPE}/resourceGroups/rg-app", KV_SECRETS),
+    assignment(1, U_ALICE, "User", SUB_SCOPE, OWNER),    # duplicate row, as ARG can return
 ]
 
 
@@ -205,6 +208,18 @@ class FakeMetrics:
         return CPU.get(name)
 
 
+class FakeRoles:
+    """Stands in for the Azure authorization API's role definition list."""
+
+    def __init__(self, fail: bool = False):
+        self.fail = fail
+
+    def role_names(self, subscription_ids):
+        if self.fail:
+            raise RuntimeError("authorization API unavailable")
+        return {KV_SECRETS: "Key Vault Secrets User", OWNER: "Owner"}
+
+
 class FakeDirectory:
     def __init__(self, fail: bool = False):
         self.fail = fail
@@ -234,7 +249,7 @@ def directory():
 
 @pytest.fixture
 def clients(graph, metrics, directory):
-    return Clients(graph=graph, metrics=metrics, directory=directory)
+    return Clients(graph=graph, metrics=metrics, directory=directory, roles=FakeRoles())
 
 
 @pytest.fixture

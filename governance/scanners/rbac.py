@@ -1,12 +1,17 @@
 """Shared role-assignment loading for the identity and access checks.
 
-Role assignments and role definitions both come from Resource Graph's
-`authorizationresources` table, in two separate queries. They are matched in
-Python by role definition GUID rather than with a KQL join, because the two
-tables format `roleDefinitionId` differently (an assignment's ID is
-subscription-scoped; a definition's may not be) and built-in roles are not
-guaranteed to appear as rows. Well-known built-in role GUIDs are therefore
-mapped directly; they are fixed across all Azure tenants.
+Role assignments come from Resource Graph's `authorizationresources` table.
+Role names are resolved in Python by role definition GUID, from three sources
+in increasing order of authority:
+
+1. Privileged built-in roles, mapped directly. Their GUIDs are fixed across
+   every Azure tenant, so the checks work even if the other sources fail.
+2. Custom role definitions returned by Resource Graph.
+3. The Azure authorization API (`Clients.roles`), which also covers built-in
+   roles. Resource Graph does not return built-in role definitions.
+
+A KQL join is avoided because assignments and definitions format
+`roleDefinitionId` differently and built-in roles are absent from the table.
 """
 
 from __future__ import annotations
@@ -109,19 +114,27 @@ def resource_group_of(scope: str | None) -> str | None:
     return None
 
 
-def role_names(clients: Clients) -> dict[str, str]:
-    """Role GUID -> role name, from built-ins plus whatever definitions ARG returns."""
+def role_names(clients: Clients, subscription_ids: list[str]) -> dict[str, str]:
+    """Role GUID -> role name. See the module docstring for the sources."""
     names = dict(BUILT_IN_NAMES)
     for row in clients.graph.query(DEFINITIONS_KQL):
         if row.get("roleName"):
             names[role_guid(row["id"])] = row["roleName"]
+    if clients.roles is not None and subscription_ids:
+        try:
+            names.update(clients.roles.role_names(subscription_ids))
+        except Exception:
+            log.warning("Role definition lookup failed; some roles will show as GUIDs",
+                        exc_info=True)
     return names
 
 
 def load_assignments(clients: Clients) -> list[RoleAssignment]:
-    names = role_names(clients)
+    # Resource Graph can return the same assignment more than once; keep one per ID.
+    rows = {row["id"].lower(): row for row in clients.graph.query(ASSIGNMENTS_KQL)}.values()
+    names = role_names(clients, [r["subscriptionId"] for r in rows if r.get("subscriptionId")])
     assignments = []
-    for row in clients.graph.query(ASSIGNMENTS_KQL):
+    for row in rows:
         guid = role_guid(row.get("roleDefinitionId"))
         assignments.append(
             RoleAssignment(

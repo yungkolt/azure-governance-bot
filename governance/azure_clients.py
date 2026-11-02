@@ -241,6 +241,43 @@ class GraphDirectory:
         return {i: p for i in set(ids) if (p := self._cache.get(i))}
 
 
+class RoleCatalog(Protocol):
+    """Maps role definition GUIDs to names for the given subscriptions."""
+
+    def role_names(self, subscription_ids: list[str]) -> dict[str, str]: ...
+
+
+class AzureRoleCatalog:
+    """Role definitions from the Azure authorization API.
+
+    Resource Graph's authorizationresources table does not include built-in
+    role definitions, so names for roles such as Key Vault Secrets User come
+    from here. The list includes every built-in role plus custom roles
+    assignable in each subscription, and is cached for the run.
+    """
+
+    def __init__(self, credential=None):
+        from azure.identity import DefaultAzureCredential
+
+        self._credential = credential or DefaultAzureCredential()
+        self._cache: dict[str, dict[str, str]] = {}
+
+    def role_names(self, subscription_ids: list[str]) -> dict[str, str]:
+        from azure.mgmt.authorization import AuthorizationManagementClient
+
+        names: dict[str, str] = {}
+        for sub in sorted(set(subscription_ids)):
+            if sub not in self._cache:
+                client = AuthorizationManagementClient(self._credential, sub)
+                self._cache[sub] = {
+                    d.name.lower(): d.role_name
+                    for d in client.role_definitions.list(scope=f"/subscriptions/{sub}")
+                    if d.name and d.role_name
+                }
+            names.update(self._cache[sub])
+        return names
+
+
 def _chunks(items: list, size: int):
     for start in range(0, len(items), size):
         yield items[start:start + size]
@@ -259,6 +296,7 @@ class Clients:
     graph: GraphQuery
     metrics: MetricsQuery | None = None
     directory: DirectoryQuery | None = None
+    roles: RoleCatalog | None = None
 
 
 def build_clients(subscription_ids: list[str] | None = None) -> Clients:
@@ -270,4 +308,5 @@ def build_clients(subscription_ids: list[str] | None = None) -> Clients:
         graph=ResourceGraph(subscription_ids, credential=credential),
         metrics=AzureMetrics(credential=credential),
         directory=GraphDirectory(credential=credential),
+        roles=AzureRoleCatalog(credential=credential),
     )
